@@ -27,4 +27,9 @@ describe("cli.ts dispatcher", () => {
     const { code } = await run(["frobnicate"]);
     expect(code).not.toBe(0);
   });
+
+  test("run-load without --db fails instead of silently using a throwaway db", async () => {
+    const { code } = await run(["run-load", "--id", "x"]);
+    expect(code).not.toBe(0);
+  });
 });

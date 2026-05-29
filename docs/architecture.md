@@ -3,7 +3,7 @@
 Hermes Workflows compiles a workflow graph onto native Hermes primitives. It is
 a thin orchestration layer, not a separate engine.
 
-```
+```text
 @xyflow editor (later)        model tools (workflow_list/run/status/explain)
         |                                   |
    workflow specs (YAML/JSON)               |

@@ -23,15 +23,24 @@ def invoke(
     *,
     cwd: Optional[str] = None,
     input_text: Optional[str] = None,
+    timeout: Optional[float] = 120.0,
 ) -> Any:
-    """Run ``argv`` and return parsed JSON stdout (or None if stdout is empty)."""
-    proc = subprocess.run(
-        list(argv),
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        input=input_text,
-    )
+    """Run ``argv`` and return parsed JSON stdout (or None if stdout is empty).
+
+    A bounded ``timeout`` guards against a hung core process wedging the host
+    (the plugin is loaded in-process by Hermes); a timeout surfaces as a
+    ``CoreBridgeError``."""
+    try:
+        proc = subprocess.run(
+            list(argv),
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            input=input_text,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CoreBridgeError(-1, f"core CLI timed out after {timeout}s") from exc
     if proc.returncode != 0:
         message = proc.stderr.strip() or proc.stdout.strip()
         raise CoreBridgeError(proc.returncode, message)

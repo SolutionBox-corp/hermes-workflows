@@ -6,7 +6,15 @@
  * A spec without a `ui` block must load and be fully executable.
  */
 
-import type { Workflow, Edge, EdgeCondition, Scope, Trigger, Defaults } from "./workflow.ts";
+import type {
+  Workflow,
+  Edge,
+  EdgeCondition,
+  Scope,
+  Trigger,
+  Defaults,
+  MemoryProviderKind,
+} from "./workflow.ts";
 import type {
   WorkflowNode,
   AgentTaskNode,
@@ -27,6 +35,7 @@ export interface LoadResult {
 const NODE_TYPES = new Set(["agent_task", "condition", "human_review", "finish"]);
 const SCOPE_TYPES = new Set(["global", "project", "projects"]);
 const REVIEW_OPTIONS = new Set(["approved", "rejected", "needs_changes"]);
+const MEMORY_PROVIDERS = new Set(["auto", "open_second_brain", "none"]);
 
 type Rec = Record<string, unknown>;
 
@@ -117,7 +126,11 @@ function parseDefaults(value: unknown): Defaults | undefined {
     const mem = value["memory"];
     defaults.memory = {};
     if (mem["provider"] !== undefined) {
-      defaults.memory.provider = str(mem["provider"], "defaults.memory.provider") as never;
+      const provider = str(mem["provider"], "defaults.memory.provider");
+      if (!MEMORY_PROVIDERS.has(provider)) {
+        fail(`defaults.memory.provider must be one of ${[...MEMORY_PROVIDERS].join(", ")}`);
+      }
+      defaults.memory.provider = provider as MemoryProviderKind;
     }
     if (mem["fail_open"] !== undefined) {
       if (typeof mem["fail_open"] !== "boolean") fail("defaults.memory.fail_open must be a boolean");

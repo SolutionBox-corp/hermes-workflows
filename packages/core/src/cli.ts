@@ -55,7 +55,7 @@ async function readRunFile(path: string): Promise<RunState> {
 
 async function dispatch(command: string | undefined, flags: Flags): Promise<unknown> {
   const spec = flags._[0];
-  const db = str(flags, "db") ?? "";
+  const db = str(flags, "db"); // optional here; commands that need it pass it through required()
 
   switch (command) {
     case "list-specs": {

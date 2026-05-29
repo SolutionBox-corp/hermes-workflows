@@ -81,4 +81,35 @@ describe("parseWorkflow", () => {
   test("rejects a non-mapping document", () => {
     expect(() => parseWorkflow("- just\n- a list")).toThrow(WorkflowParseError);
   });
+
+  test("rejects an unknown memory provider", () => {
+    expect(() =>
+      fromObject({
+        id: "x",
+        name: "X",
+        version: 1,
+        scope: { type: "global" },
+        trigger: { type: "manual" },
+        nodes: [{ id: "done", type: "finish" }],
+        edges: [],
+        defaults: { memory: { provider: "bogus" } },
+      }),
+    ).toThrow(WorkflowParseError);
+  });
+
+  test("accepts known memory providers", () => {
+    for (const provider of ["auto", "open_second_brain", "none"] as const) {
+      const { workflow } = fromObject({
+        id: "x",
+        name: "X",
+        version: 1,
+        scope: { type: "global" },
+        trigger: { type: "manual" },
+        nodes: [{ id: "done", type: "finish" }],
+        edges: [],
+        defaults: { memory: { provider } },
+      });
+      expect(workflow.defaults?.memory?.provider).toBe(provider);
+    }
+  });
 });

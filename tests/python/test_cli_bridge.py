@@ -21,3 +21,8 @@ def test_invoke_returns_none_for_empty_stdout() -> None:
 def test_invoke_raises_on_nonzero_exit() -> None:
     with pytest.raises(CoreBridgeError):
         invoke([sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(2)"])
+
+
+def test_invoke_times_out() -> None:
+    with pytest.raises(CoreBridgeError):
+        invoke([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.3)

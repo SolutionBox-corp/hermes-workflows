@@ -5,7 +5,7 @@
   "description": "Visual workflow orchestration for Hermes — compiles a graph spec onto native Kanban, Cron, and Profiles.",
   "license": "MIT",
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": ["packages/*"],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "oxlint -c oxlint.json",
