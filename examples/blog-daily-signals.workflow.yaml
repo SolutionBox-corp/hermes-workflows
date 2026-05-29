@@ -1,0 +1,77 @@
+id: blog-daily-signals
+name: Blog Daily Signals
+version: 1
+
+scope:
+  type: global
+
+trigger:
+  type: cron
+  schedule: "0 9 * * *"
+  timezone: "Europe/Belgrade"
+
+defaults:
+  memory:
+    provider: auto
+    fail_open: true
+
+nodes:
+  - id: fetch
+    type: agent_task
+    title: Find recent signals
+    profile: researcher
+    prompt: |
+      Find relevant items from the last 24 hours for the configured topic.
+
+  - id: summarize
+    type: agent_task
+    title: Summarize signals
+    profile: analyst
+    prompt: |
+      Summarize the collected items into a compact list of strong signals.
+
+  - id: draft
+    type: agent_task
+    title: Draft blog post
+    profile: writer
+    prompt: |
+      Write a blog post draft based on the summarized signals.
+
+  - id: review
+    type: human_review
+    title: Review blog draft
+    options:
+      - approved
+      - rejected
+      - needs_changes
+
+  - id: publish
+    type: agent_task
+    title: Prepare publication task
+    profile: publisher
+    prompt: |
+      Create a "Ready to publish" Kanban task with the approved draft attached.
+
+  - id: done
+    type: finish
+    title: Done
+    outcome: success
+
+edges:
+  - from: fetch
+    to: summarize
+
+  - from: summarize
+    to: draft
+
+  - from: draft
+    to: review
+
+  - from: review
+    to: publish
+    condition:
+      type: review_status
+      equals: approved
+
+  - from: publish
+    to: done

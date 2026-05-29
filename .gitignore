@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Local runtime state (never committed)
+*.db
+*.db-shm
+*.db-wal
+
+# Editor / OS
+.DS_Store
+.codegraph/
