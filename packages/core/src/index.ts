@@ -89,3 +89,7 @@ export type {
   WorkflowRetrospective,
 } from "./memory/MemoryProvider.ts";
 export { NoopMemoryProvider } from "./memory/NoopMemoryProvider.ts";
+export { O2BCLIProvider, defaultRunner } from "./memory/O2BCLIProvider.ts";
+export type { CliRunner } from "./memory/O2BCLIProvider.ts";
+export { redactSecrets } from "./memory/redact.ts";
+export { FailOpenMemoryProvider } from "./memory/FailOpenMemoryProvider.ts";
