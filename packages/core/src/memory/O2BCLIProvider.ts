@@ -1,7 +1,10 @@
 /**
- * OpenSecondBrain memory provider over the `o2b` CLI. Auto-detected via
- * `o2b brain doctor`; writes go through `o2b brain note`. The CLI runner is
- * injected so the provider is testable without a real installation.
+ * OpenSecondBrain memory provider over the `o2b` CLI. Availability is probed
+ * with `o2b status` (configuration present), not `o2b brain doctor` — the
+ * latter is a strict vault-content health check that fails on pre-existing
+ * content issues and so is a poor "is O2B connected" signal. Writes go through
+ * `o2b brain note`. The CLI runner is injected so the provider is testable
+ * without a real installation.
  *
  * Reading context is a no-op in the MVP (returns empty); pulling O2B context
  * into prompts is post-MVP.
@@ -32,7 +35,7 @@ export class O2BCLIProvider implements WorkflowMemoryProvider {
 
   async isAvailable(): Promise<boolean> {
     try {
-      const result = await this.run([this.bin, "brain", "doctor"]);
+      const result = await this.run([this.bin, "status"]);
       return result.exitCode === 0;
     } catch {
       return false;

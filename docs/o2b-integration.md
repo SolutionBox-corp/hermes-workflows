@@ -21,8 +21,11 @@ Implementations:
 
 - `NoopMemoryProvider` (default) — reports unavailable, returns empty context,
   skips writes.
-- `O2BCLIProvider` — uses the `o2b` CLI: availability via `o2b brain doctor`,
-  writes via `o2b brain note`. The CLI runner is injectable for testing.
+- `O2BCLIProvider` — uses the `o2b` CLI: availability via `o2b status`
+  (configuration present), writes via `o2b brain note`. The CLI runner is
+  injectable for testing. Note: `o2b brain doctor` is deliberately not used as
+  the probe — it is a strict vault-content health check that fails on
+  pre-existing content issues, which is unrelated to whether O2B is connected.
 
 ## Fail-open and redaction
 

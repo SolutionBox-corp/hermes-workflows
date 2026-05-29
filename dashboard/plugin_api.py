@@ -41,12 +41,13 @@ async def list_runs() -> dict:
 @router.get("/o2b-status")
 async def o2b_status() -> dict:
     """Best-effort OpenSecondBrain availability for the connection badge.
-    Never raises — O2B is optional."""
+    Probes `o2b status` (configuration present), not `o2b brain doctor` (a
+    strict vault-content check). Never raises — O2B is optional."""
     if shutil.which("o2b") is None:
         return {"connected": False}
     try:
         result = subprocess.run(
-            ["o2b", "brain", "doctor"], capture_output=True, text=True, timeout=10
+            ["o2b", "status"], capture_output=True, text=True, timeout=10
         )
         return {"connected": result.returncode == 0}
     except Exception:

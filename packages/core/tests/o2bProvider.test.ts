@@ -17,8 +17,10 @@ const throwingRunner: CliRunner = async () => {
 };
 
 describe("O2BCLIProvider", () => {
-  test("isAvailable reflects the doctor exit code", async () => {
-    expect(await new O2BCLIProvider(recordingRunner(0).run).isAvailable()).toBe(true);
+  test("isAvailable probes `o2b status` and reflects its exit code", async () => {
+    const ok = recordingRunner(0);
+    expect(await new O2BCLIProvider(ok.run).isAvailable()).toBe(true);
+    expect(ok.calls[0]).toEqual(["o2b", "status"]);
     expect(await new O2BCLIProvider(recordingRunner(1).run).isAvailable()).toBe(false);
   });
 
