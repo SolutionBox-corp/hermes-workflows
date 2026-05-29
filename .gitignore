@@ -3,6 +3,10 @@ dist/
 coverage/
 *.log
 
+# The dashboard bundle is hand-authored (build-free), not a build artifact.
+!dashboard/dist/
+!dashboard/dist/index.js
+
 # Python
 __pycache__/
 *.pyc
