@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+# The product (core engine, CLI) is TypeScript on Bun; see package.json. This
+# pyproject exists only so Hermes can load the thin Python bridge in-process as
+# a plugin. No runtime dependencies.
+[project]
+name = "hermes-workflows"
+version = "0.1.0"
+description = "Thin Hermes Python bridge for Hermes Workflows. The engine and CLI are TypeScript on Bun (see package.json)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Hermes Workflows contributors" }]
+dependencies = []
+
+[tool.setuptools]
+packages = ["hermes_workflows", "hermes_workflows.bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+addopts = "-q"
