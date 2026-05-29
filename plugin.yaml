@@ -1,0 +1,15 @@
+name: hermes-workflows
+version: "0.1.0"
+description: "Visual workflow orchestration over Hermes Kanban, Cron, and Profiles, with optional OpenSecondBrain memory."
+author: "Hermes Workflows contributors"
+kind: standalone
+
+provides_hooks: []
+
+# Model-visible tools stay narrow: no graph editing (that is human-only via the
+# dashboard / CLI). Keeping this small avoids tool-schema bloat.
+provides_tools:
+  - workflow_list
+  - workflow_run
+  - workflow_status
+  - workflow_explain

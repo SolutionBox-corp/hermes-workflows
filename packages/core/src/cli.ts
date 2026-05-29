@@ -16,6 +16,7 @@ import {
   cmdRunLoad,
   cmdRunSave,
   cmdRunList,
+  cmdListSpecs,
 } from "./cli/commands.ts";
 
 interface Flags {
@@ -57,6 +58,10 @@ async function dispatch(command: string | undefined, flags: Flags): Promise<unkn
   const db = str(flags, "db") ?? "";
 
   switch (command) {
+    case "list-specs": {
+      const roots = (str(flags, "roots") ?? "").split(",").filter((r) => r.length > 0);
+      return cmdListSpecs(roots);
+    }
     case "validate":
       return cmdValidate(requireSpec(spec));
     case "compile-preview":

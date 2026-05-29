@@ -17,6 +17,8 @@ import type { AdvanceResult } from "../runtime/advance.ts";
 import { createRunState } from "../runtime/state.ts";
 import { openRunsDatabase } from "../runtime/db/connection.ts";
 import { RunRepository } from "../runtime/db/runRepository.ts";
+import { SpecStore } from "../runtime/specStore.ts";
+import type { SpecSummary } from "../runtime/specStore.ts";
 
 export interface Explanation {
   id: string;
@@ -32,6 +34,10 @@ async function loadWorkflow(specPath: string): Promise<Workflow> {
 
 function repository(dbPath: string): RunRepository {
   return new RunRepository(openRunsDatabase(dbPath));
+}
+
+export function cmdListSpecs(roots: string[]): Promise<SpecSummary[]> {
+  return new SpecStore(roots).list();
 }
 
 export async function cmdValidate(specPath: string): Promise<ValidationResult> {

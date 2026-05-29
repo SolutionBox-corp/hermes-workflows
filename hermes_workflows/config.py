@@ -35,3 +35,16 @@ def runs_artifacts_dir() -> Path:
 def runtime_board() -> str:
     """Kanban board agent_task cards are created on."""
     return os.environ.get("HERMES_WORKFLOWS_BOARD", "hermes-workflows")
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def core_cli() -> list[str]:
+    """Argv prefix to invoke the TypeScript core CLI."""
+    return ["bun", "run", str(repo_root() / "packages" / "core" / "src" / "cli.ts")]
+
+
+def spec_roots() -> list[str]:
+    return [str(global_workflows_dir()), str(templates_dir())]

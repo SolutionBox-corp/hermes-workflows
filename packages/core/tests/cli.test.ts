@@ -11,9 +11,20 @@ import {
   cmdRunLoad,
   cmdRunList,
   cmdAdvance,
+  cmdListSpecs,
 } from "../src/cli/commands.ts";
 
-const example = join(import.meta.dir, "../../../examples/feature-development.workflow.yaml");
+const examplesDir = join(import.meta.dir, "../../../examples");
+const example = join(examplesDir, "feature-development.workflow.yaml");
+
+describe("cli command — list-specs", () => {
+  test("lists workflows found under the given roots", async () => {
+    const specs = await cmdListSpecs([examplesDir]);
+    const ids = specs.map((s) => s.id).toSorted();
+    expect(ids).toEqual(["blog-daily-signals", "feature-development"]);
+    expect(specs.find((s) => s.id === "feature-development")?.trigger).toBe("manual");
+  });
+});
 
 describe("cli commands — pure (offline)", () => {
   test("validate returns a passing result for a valid spec", async () => {
