@@ -12,6 +12,15 @@ export interface CompiledKanbanTask {
   assignee: string;
   workflow_template_id: string;
   current_step_key: string;
+  /** Everything the bridge needs to create the card — the engine is the single
+   *  interpreter of the spec; the Python orchestrator just executes this. */
+  title?: string;
+  prompt: string;
+  model?: string;
+  skills?: string[];
+  workspace?: "scratch" | "worktree";
+  timeout_seconds?: number;
+  max_retries?: number;
 }
 
 export interface CompiledCronJob {
@@ -38,15 +47,26 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
   const profiles = new Set<string>();
   const skills = new Set<string>();
 
+  const defaultRetries = workflow.defaults?.max_retries;
+
   for (const node of workflow.nodes) {
     if (node.type !== "agent_task") continue;
     const assignee = node.profile ?? defaultProfile ?? "";
-    kanban_tasks.push({
+    const task: CompiledKanbanTask = {
       node: node.id,
       assignee,
       workflow_template_id: workflow.id,
       current_step_key: node.id,
-    });
+      prompt: node.prompt,
+    };
+    if (node.title !== undefined) task.title = node.title;
+    if (node.model !== undefined) task.model = node.model;
+    if (node.skills !== undefined) task.skills = node.skills;
+    if (node.workspace !== undefined) task.workspace = node.workspace.type;
+    if (node.timeout_seconds !== undefined) task.timeout_seconds = node.timeout_seconds;
+    const retries = node.max_retries ?? defaultRetries;
+    if (retries !== undefined) task.max_retries = retries;
+    kanban_tasks.push(task);
     if (assignee) profiles.add(assignee);
     for (const skill of node.skills ?? []) skills.add(skill);
   }

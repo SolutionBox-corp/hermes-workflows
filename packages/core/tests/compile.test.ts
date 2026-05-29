@@ -17,12 +17,16 @@ describe("compileToHermesPlan", () => {
       "fix",
       "release_notes",
     ]);
-    expect(plan.kanban_tasks[0]).toEqual({
+    expect(plan.kanban_tasks[0]).toMatchObject({
       node: "plan",
       assignee: "product-tech-lead",
       workflow_template_id: "feature-development",
       current_step_key: "plan",
+      title: "Plan feature",
     });
+    expect(plan.kanban_tasks[0]?.prompt).toContain("implementation plan");
+    const implement = plan.kanban_tasks.find((t) => t.node === "implement");
+    expect(implement?.workspace).toBe("worktree");
     expect(plan.profiles).toContain("qa-engineer");
     expect(plan.memory).toEqual({ provider: "auto", fail_open: true });
   });
