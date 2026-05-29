@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# The dashboard bundle is hand-authored (build-free), not a build artifact.
+!dashboard/dist/
+!dashboard/dist/index.js
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Local runtime state (never committed)
+*.db
+*.db-shm
+*.db-wal
+
+# Editor / OS
+.DS_Store
+.codegraph/

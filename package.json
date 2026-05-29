@@ -1,0 +1,26 @@
+{
+  "name": "hermes-workflows",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Visual workflow orchestration for Hermes — compiles a graph spec onto native Kanban, Cron, and Profiles.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint -c oxlint.json",
+    "lint:fix": "oxlint -c oxlint.json --fix",
+    "fmt": "oxfmt --write '**/*.{ts,js,json}' --no-error-on-unmatched-pattern",
+    "fmt:check": "oxfmt --check '**/*.{ts,js,json}' --no-error-on-unmatched-pattern",
+    "test": "bun test",
+    "test:py": "python3 -m pytest",
+    "validate": "bun run typecheck && bun run lint && bun run test && bun run test:py"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/node": "^22.0.0",
+    "oxfmt": "0.47.0",
+    "oxlint": "1.62.0",
+    "typescript": "^5.5.0"
+  }
+}

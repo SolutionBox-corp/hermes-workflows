@@ -1,0 +1,101 @@
+id: feature-development
+name: Feature Development
+version: 1
+
+scope:
+  type: project
+
+trigger:
+  type: manual
+
+defaults:
+  profile: fullstack-engineer
+  max_retries: 1
+  memory:
+    provider: auto
+    fail_open: true
+
+nodes:
+  - id: plan
+    type: agent_task
+    title: Plan feature
+    profile: product-tech-lead
+    prompt: |
+      Convert the feature request into a concrete implementation plan.
+      Return tasks, risks, files likely to change, and validation steps.
+
+  - id: implement
+    type: agent_task
+    title: Implement feature
+    profile: fullstack-engineer
+    workspace:
+      type: worktree
+    prompt: |
+      Implement the feature according to the plan.
+
+  - id: validate
+    type: agent_task
+    title: Validate implementation
+    profile: qa-engineer
+    prompt: |
+      Run lint and tests. Report node outcome success when clean, failure otherwise.
+
+  - id: fix
+    type: agent_task
+    title: Fix validation errors
+    profile: fullstack-engineer
+    prompt: |
+      Fix the validation errors reported by the previous node.
+
+  - id: review
+    type: human_review
+    title: Final human review
+    options:
+      - approved
+      - rejected
+      - needs_changes
+
+  - id: release_notes
+    type: agent_task
+    title: Prepare release notes
+    profile: product-tech-lead
+    prompt: |
+      Prepare release notes for the merged feature.
+
+  - id: done
+    type: finish
+    title: Done
+    outcome: success
+
+edges:
+  - from: plan
+    to: implement
+
+  - from: implement
+    to: validate
+
+  - from: validate
+    to: review
+    condition:
+      type: node_status
+      node: validate
+      equals: success
+
+  - from: validate
+    to: fix
+    condition:
+      type: node_status
+      node: validate
+      equals: failure
+
+  - from: fix
+    to: validate
+
+  - from: review
+    to: release_notes
+    condition:
+      type: review_status
+      equals: approved
+
+  - from: release_notes
+    to: done
