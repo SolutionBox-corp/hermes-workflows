@@ -167,6 +167,15 @@ export class RunRepository {
         `SELECT id FROM workflow_runs WHERE status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")})`,
       )
       .all(...ACTIVE_STATUSES) as { id: string }[];
+    return this.hydrate(ids);
+  }
+
+  listAllRuns(): RunState[] {
+    const ids = this.db.query(`SELECT id FROM workflow_runs`).all() as { id: string }[];
+    return this.hydrate(ids);
+  }
+
+  private hydrate(ids: { id: string }[]): RunState[] {
     return ids.map((r) => this.loadRun(r.id)).filter((r): r is RunState => r !== null);
   }
 
