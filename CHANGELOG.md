@@ -40,8 +40,9 @@ run inspector it drives.
 - Templates page (list, open, run) and a live run inspector that polls the run,
   colours nodes by status, and offers whole-run cancel/retry and per-node retry.
 - Dashboard workflow authoring lifecycle: create a workflow from a modal
-  (id/name/scope/trigger), seeded with a minimal valid graph and opened straight
-  in the editor; duplicate under a new id; export the canonical YAML; and delete
+  (name/scope/trigger; the id is generated, not user-entered), seeded with a
+  minimal valid graph and opened straight in the editor; duplicate under a new id;
+  export the canonical YAML; and delete
   with confirmation. Backed by `POST /workflows` (refuse-overwrite; a clashing id
   is `409`, an invalid graph `400`), `DELETE /workflows/{id}` (`404` if absent),
   and `GET /workflows/{id}/export` (the on-disk YAML in a JSON envelope, so no

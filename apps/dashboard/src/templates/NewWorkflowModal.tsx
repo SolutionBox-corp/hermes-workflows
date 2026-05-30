@@ -3,7 +3,7 @@ import { getApiClient } from "../host";
 import type { WorkflowsApi } from "../api/client";
 import type { Scope, ScopeType, Trigger } from "../api/types";
 import { buildSeedWorkflow } from "./seed";
-import { isValidSlug } from "./slug";
+import { generateWorkflowId } from "./id";
 
 export interface NewWorkflowModalProps {
   /** Called with the new workflow id once it is created on disk. */
@@ -32,7 +32,6 @@ export function NewWorkflowModal({
   client,
 }: NewWorkflowModalProps): React.ReactElement {
   const api = useMemo(() => client ?? getApiClient(), [client]);
-  const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [scopeType, setScopeType] = useState<ScopeType>("global");
   const [projects, setProjects] = useState("");
@@ -46,19 +45,24 @@ export function NewWorkflowModal({
     // marks the `FormEvent` alias deprecated ("doesn't actually exist").
     (event: { preventDefault: () => void }) => {
       event.preventDefault();
-      if (!isValidSlug(id)) {
-        setError("Id must be a slug: letters, digits, hyphen, or underscore only.");
+      const trimmedName = name.trim();
+      if (trimmedName.length === 0) {
+        setError("Give the workflow a name.");
         return;
       }
       if (triggerType === "cron" && schedule.trim().length === 0) {
         setError("A cron trigger needs a schedule.");
         return;
       }
+      // The id is an internal handle (it becomes the on-disk filename), so we
+      // generate it rather than asking the user. A fresh id is drawn each submit,
+      // so a (vanishingly rare) 409 collision self-resolves on the next attempt.
+      const id = generateWorkflowId();
       const trigger: Trigger =
         triggerType === "cron" ? { type: "cron", schedule: schedule.trim() } : { type: "manual" };
       const workflow = buildSeedWorkflow({
         id,
-        name: name.trim() || id,
+        name: trimmedName,
         scope: buildScope(scopeType, projects),
         trigger,
       });
@@ -73,73 +77,96 @@ export function NewWorkflowModal({
           setBusy(false);
         });
     },
-    [api, id, name, scopeType, projects, triggerType, schedule, onCreated],
+    [api, name, scopeType, projects, triggerType, schedule, onCreated],
   );
 
   return (
-    <div role="dialog" aria-label="New workflow" style={overlay}>
-      <form onSubmit={submit} style={panel}>
+    <div role="dialog" aria-label="New workflow" className="hw-modal-overlay">
+      <form onSubmit={submit} className="hw-modal">
         <h3 style={{ margin: 0 }}>New workflow</h3>
 
-        <label htmlFor="nw-id">Id</label>
-        <input id="nw-id" value={id} onChange={(e) => setId(e.target.value)} autoFocus />
+        <div className="hw-field">
+          <label className="hw-label" htmlFor="nw-name">
+            Name
+          </label>
+          <input
+            id="nw-name"
+            className="hw-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+        </div>
 
-        <label htmlFor="nw-name">Name</label>
-        <input id="nw-name" value={name} onChange={(e) => setName(e.target.value)} />
-
-        <label htmlFor="nw-scope">Scope</label>
-        <select
-          id="nw-scope"
-          value={scopeType}
-          onChange={(e) => setScopeType(e.target.value as ScopeType)}
-        >
-          <option value="global">global</option>
-          <option value="project">project</option>
-          <option value="projects">projects</option>
-        </select>
+        <div className="hw-field">
+          <label className="hw-label" htmlFor="nw-scope">
+            Scope
+          </label>
+          <select
+            id="nw-scope"
+            className="hw-select"
+            value={scopeType}
+            onChange={(e) => setScopeType(e.target.value as ScopeType)}
+          >
+            <option value="global">global</option>
+            <option value="project">project</option>
+            <option value="projects">projects</option>
+          </select>
+        </div>
         {scopeType !== "global" && (
-          <>
-            <label htmlFor="nw-projects">Projects (comma-separated)</label>
+          <div className="hw-field">
+            <label className="hw-label" htmlFor="nw-projects">
+              Projects (comma-separated)
+            </label>
             <input
               id="nw-projects"
+              className="hw-input"
               value={projects}
               onChange={(e) => setProjects(e.target.value)}
             />
-          </>
+          </div>
         )}
 
-        <label htmlFor="nw-trigger">Trigger</label>
-        <select
-          id="nw-trigger"
-          value={triggerType}
-          onChange={(e) => setTriggerType(e.target.value as Trigger["type"])}
-        >
-          <option value="manual">manual</option>
-          <option value="cron">cron</option>
-        </select>
+        <div className="hw-field">
+          <label className="hw-label" htmlFor="nw-trigger">
+            Trigger
+          </label>
+          <select
+            id="nw-trigger"
+            className="hw-select"
+            value={triggerType}
+            onChange={(e) => setTriggerType(e.target.value as Trigger["type"])}
+          >
+            <option value="manual">manual</option>
+            <option value="cron">cron</option>
+          </select>
+        </div>
         {triggerType === "cron" && (
-          <>
-            <label htmlFor="nw-schedule">Schedule (cron)</label>
+          <div className="hw-field">
+            <label className="hw-label" htmlFor="nw-schedule">
+              Schedule (cron)
+            </label>
             <input
               id="nw-schedule"
+              className="hw-input"
               value={schedule}
               onChange={(e) => setSchedule(e.target.value)}
               placeholder="0 5 * * *"
             />
-          </>
+          </div>
         )}
 
         {error !== null && (
-          <p role="alert" style={{ color: "var(--error, #d33)" }}>
+          <p role="alert" className="hw-alert">
             {error}
           </p>
         )}
 
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button type="button" onClick={onCancel}>
+        <div className="hw-modal-actions">
+          <button type="button" className="hw-btn" onClick={onCancel}>
             Cancel
           </button>
-          <button type="submit" disabled={busy}>
+          <button type="submit" className="hw-btn hw-btn--primary" disabled={busy}>
             Create
           </button>
         </div>
@@ -147,23 +174,3 @@ export function NewWorkflowModal({
     </div>
   );
 }
-
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.4)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const panel: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  minWidth: 320,
-  padding: 20,
-  background: "var(--bg, #1e1e1e)",
-  border: "1px solid var(--border, #2a2a2a)",
-  borderRadius: 8,
-};

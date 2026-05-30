@@ -174,11 +174,11 @@ describe("TemplatesPage — row lifecycle actions", () => {
     expect(deleteWorkflow).not.toHaveBeenCalled();
   });
 
-  it("opens the New modal and reports the created id via onCreated", async () => {
+  it("opens the New modal and reports the generated id via onCreated", async () => {
     const onCreated = vi.fn();
     const createWorkflow = vi.fn(
       async (_body: CreateWorkflowBody): Promise<SpecDetail> => ({
-        workflow: { id: "brand" } as never,
+        workflow: { id: "x" } as never,
         path: "",
       }),
     );
@@ -187,11 +187,11 @@ describe("TemplatesPage — row lifecycle actions", () => {
 
     await screen.findByText("Deploy");
     await userEvent.click(screen.getByRole("button", { name: /new workflow/i }));
-    await userEvent.type(screen.getByLabelText(/^id/i), "brand");
     await userEvent.type(screen.getByLabelText(/^name/i), "Brand");
     await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
 
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("brand"));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    expect(onCreated.mock.calls[0]![0]).toMatch(/^[a-z]{6}$/);
   });
 
   it("closes the New modal on cancel", async () => {

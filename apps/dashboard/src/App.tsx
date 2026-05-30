@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import "./ui/theme.css";
 import { getApiClient } from "./host";
 import type { WorkflowsApi } from "./api/client";
 import type { SpecDetail } from "./api/types";
@@ -50,7 +51,7 @@ export function App({ client }: AppProps): React.ReactElement {
           borderBottom: "1px solid var(--border, #2a2a2a)",
         }}
       >
-        <button type="button" onClick={() => setView({ name: "templates" })}>
+        <button type="button" className="hw-btn hw-btn--sm" onClick={() => setView({ name: "templates" })}>
           Workflows
         </button>
         {view.name === "editor" && <span>Editing {view.id}</span>}

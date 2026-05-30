@@ -93,8 +93,9 @@ registers the root component via
 ### Views
 
 - **Templates** — lists workflows (name, id, scope, trigger) and is the authoring
-  surface. **New workflow** opens a modal (id, name, scope, trigger) that seeds a
-  minimal valid graph and drops straight into the editor. Per row: Open (editor),
+  surface. **New workflow** opens a modal (name, scope, trigger; the id is
+  generated, not user-entered) that seeds a minimal valid graph and drops straight
+  into the editor. Per row: Open (editor),
   Run (starts a run, opens the inspector), Duplicate (copy under a new id), Export
   (download the canonical YAML), and Delete (with confirmation).
 - **Editor** — the `@xyflow/react` canvas with a node palette, a per-type node

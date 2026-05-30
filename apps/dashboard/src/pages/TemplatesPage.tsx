@@ -149,11 +149,15 @@ export function TemplatesPage({
     <div style={{ padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <h2 style={{ marginRight: "auto" }}>Workflows</h2>
-        <button type="button" onClick={() => setShowNew(true)}>
+        <button type="button" className="hw-btn hw-btn--primary" onClick={() => setShowNew(true)}>
           New workflow
         </button>
       </div>
-      {runMessage !== null && <p role="status">{runMessage}</p>}
+      {runMessage !== null && (
+        <p role="status" className="hw-status">
+          {runMessage}
+        </p>
+      )}
       {showNew && (
         <NewWorkflowModal
           client={api}
@@ -182,21 +186,35 @@ export function TemplatesPage({
                 <td style={cell}>{item.scope}</td>
                 <td style={cell}>{describeTrigger(item.trigger)}</td>
                 <td style={cell}>
-                  <button type="button" onClick={() => onOpen(item.id)}>
-                    Open
-                  </button>{" "}
-                  <button type="button" onClick={() => handleRun(item.id)}>
-                    Run
-                  </button>{" "}
-                  <button type="button" onClick={() => handleDuplicate(item.id)}>
-                    Duplicate
-                  </button>{" "}
-                  <button type="button" onClick={() => handleExport(item.id)}>
-                    Export
-                  </button>{" "}
-                  <button type="button" onClick={() => handleDelete(item.id)}>
-                    Delete
-                  </button>
+                  <span className="hw-actions">
+                    <button type="button" className="hw-btn hw-btn--sm" onClick={() => onOpen(item.id)}>
+                      Open
+                    </button>
+                    <button type="button" className="hw-btn hw-btn--sm" onClick={() => handleRun(item.id)}>
+                      Run
+                    </button>
+                    <button
+                      type="button"
+                      className="hw-btn hw-btn--sm"
+                      onClick={() => handleDuplicate(item.id)}
+                    >
+                      Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      className="hw-btn hw-btn--sm"
+                      onClick={() => handleExport(item.id)}
+                    >
+                      Export
+                    </button>
+                    <button
+                      type="button"
+                      className="hw-btn hw-btn--sm hw-btn--danger"
+                      onClick={() => handleDelete(item.id)}
+                    >
+                      Delete
+                    </button>
+                  </span>
                 </td>
               </tr>
             ))}
