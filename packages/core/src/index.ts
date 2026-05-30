@@ -34,6 +34,7 @@ export type {
   Edge,
   Workflow,
 } from "./schema/workflow.ts";
+export { isWorkflowEnabled } from "./schema/workflow.ts";
 export type {
   RunStatus,
   NodeStatus,
@@ -80,7 +81,7 @@ export type { HermesPlan, CompiledKanbanTask, CompiledCronJob } from "./compiler
 export { openRunsDatabase } from "./runtime/db/connection.ts";
 export { SCHEMA_SQL } from "./runtime/db/schema.ts";
 export { RunRepository } from "./runtime/db/runRepository.ts";
-export type { RunMeta, RunSummary } from "./runtime/db/runRepository.ts";
+export type { RunMeta, RunSummary, LatestRun } from "./runtime/db/runRepository.ts";
 export { SpecStore, SpecValidationError, SpecExistsError, chooseWriteRoot } from "./runtime/specStore.ts";
 export type { SpecSummary, SpecDetail, WriteRoots } from "./runtime/specStore.ts";
 export { ArtifactStore } from "./runtime/artifacts.ts";

@@ -150,6 +150,59 @@ describe("useFlowEditor", () => {
     expect(result.current.dirty).toBe(true);
   });
 
+  it("duplicates a node under a fresh id, copying fields at an offset, and selects it", () => {
+    const { result } = renderHook(() => useFlowEditor(detail, stubClient()));
+    let newId = "";
+    act(() => {
+      newId = result.current.duplicateNode("build")!;
+    });
+
+    // a fresh slug-valid id, distinct from the source
+    expect(newId).not.toBe("build");
+    expect(result.current.nodes.map((n) => n.id)).toContain(newId);
+    expect(result.current.nodes).toHaveLength(3);
+
+    const source = result.current.nodes.find((n) => n.id === "build")!;
+    const clone = result.current.nodes.find((n) => n.id === newId)!;
+    // copied fields (id rewritten), offset position
+    expect(clone.data.node).toEqual({ ...source.data.node, id: newId });
+    expect(clone.position.x).toBeGreaterThan(source.position.x);
+    expect(clone.position.y).toBeGreaterThan(source.position.y);
+
+    expect(result.current.selectedNode?.id).toBe(newId);
+    expect(result.current.dirty).toBe(true);
+  });
+
+  it("auto-layouts nodes into ranks, marks dirty, and round-trips the positions on save", async () => {
+    const client = stubClient();
+    const { result } = renderHook(() => useFlowEditor(detail, client));
+
+    act(() => result.current.applyLayout());
+
+    const build = result.current.nodes.find((n) => n.id === "build")!;
+    const done = result.current.nodes.find((n) => n.id === "done")!;
+    // build -> done is linear, so done lands one rank to the right of build
+    expect(done.position.x).toBeGreaterThan(build.position.x);
+    expect(result.current.dirty).toBe(true);
+
+    await act(async () => {
+      await result.current.save();
+    });
+    const [, body] = (client.saveWorkflow as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const doneUi = body.ui!.xyflow!.nodes!.find((n: { id: string }) => n.id === "done")!;
+    expect(doneUi.x).toBe(done.position.x);
+  });
+
+  it("returns null when duplicating an unknown node", () => {
+    const { result } = renderHook(() => useFlowEditor(detail, stubClient()));
+    let out: string | null = "x";
+    act(() => {
+      out = result.current.duplicateNode("ghost");
+    });
+    expect(out).toBeNull();
+    expect(result.current.nodes).toHaveLength(2);
+  });
+
   it("keeps dirty and reports an error when save fails", async () => {
     const client = stubClient({
       saveWorkflow: vi.fn(async () => {
