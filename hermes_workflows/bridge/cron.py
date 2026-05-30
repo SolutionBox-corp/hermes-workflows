@@ -9,12 +9,66 @@ when none remain, so tick jobs never accumulate.
 
 from __future__ import annotations
 
+import shlex
+from pathlib import Path
 from typing import Optional
 
 from cron import jobs as cj
 
+from .. import config
+
 TICK_NAME = "hermes-workflows-tick"
 DEFAULT_TICK_SCHEDULE = "every 2m"
+
+
+def write_shim(name: str, *command_args: str, command: Optional[Path] = None) -> Path:
+    """Write an executable shim under ``HERMES_HOME/scripts`` that execs the
+    ``hermes-workflows`` entrypoint with ``command_args``. Hermes cron only runs
+    scripts that live in that directory and invokes them with no arguments, so a
+    per-purpose shim is how a trigger/tick carries its subcommand."""
+    binary = command or config.command_path()
+    scripts = config.scripts_dir()
+    scripts.mkdir(parents=True, exist_ok=True)
+    args = " ".join(shlex.quote(str(arg)) for arg in command_args)
+    path = scripts / f"{name}.sh"
+    path.write_text(f"#!/usr/bin/env bash\nexec {shlex.quote(str(binary))} {args}\n")
+    path.chmod(0o755)
+    return path
+
+
+def register_workflow_trigger(
+    *,
+    workflow_id: str,
+    schedule: str,
+    deliver: Optional[str] = None,
+    command: Optional[Path] = None,
+) -> str:
+    """Compile a workflow's cron trigger into a native Cron job that runs
+    ``hermes-workflows run <id>`` on schedule."""
+    shim = write_shim(
+        f"hermes-workflows-trigger-{workflow_id}", "run", workflow_id, command=command
+    )
+    return register_trigger(
+        workflow_id=workflow_id, schedule=schedule, script=str(shim), deliver=deliver
+    )
+
+
+def ensure_workflow_tick(
+    *, schedule: str = DEFAULT_TICK_SCHEDULE, command: Optional[Path] = None
+) -> str:
+    """Ensure the singleton tick job exists, running ``hermes-workflows
+    advance-all`` on schedule."""
+    shim = write_shim("hermes-workflows-tick", "advance-all", command=command)
+    return ensure_tick(script=str(shim), schedule=schedule)
+
+
+def sync_workflow_tick(*, active: bool, command: Optional[Path] = None) -> Optional[str]:
+    """Tick lifecycle keyed on whether any runs remain active, using the
+    advance-all shim as the job script."""
+    if active:
+        return ensure_workflow_tick(command=command)
+    teardown_tick()
+    return None
 
 
 def register_trigger(

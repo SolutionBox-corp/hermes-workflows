@@ -111,15 +111,6 @@ def _handle_status(args: dict, **_kwargs: Any) -> str:
 
 
 def _build_engine() -> Any:
-    from hermes_cli import kanban_db as kb
+    from .cli import build_engine
 
-    from . import config
-    from .engine import Engine
-    from .executor import KanbanExecutor
-
-    board = kb.connect(board=config.runtime_board())
-    return Engine(
-        core_cli=config.core_cli(),
-        db_path=str(config.runs_db_path()),
-        kanban=KanbanExecutor(board),
-    )
+    return build_engine()
