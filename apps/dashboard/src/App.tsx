@@ -65,6 +65,7 @@ export function App({ client }: AppProps): React.ReactElement {
             client={api}
             onOpen={(id) => setView({ name: "editor", id })}
             onOpenRun={(runId) => setView({ name: "inspector", runId })}
+            onCreated={(id) => setView({ name: "editor", id })}
           />
         )}
         {view.name === "editor" && <EditorLoader id={view.id} client={api} />}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getApiClient } from "../host";
 import { downloadTextFile } from "../templates/download";
+import { NewWorkflowModal } from "../templates/NewWorkflowModal";
 import type { WorkflowsApi } from "../api/client";
 import type { Trigger, WorkflowListItem } from "../api/types";
 
@@ -11,6 +12,9 @@ export interface TemplatesPageProps {
   onOpen: (workflowId: string) => void;
   /** Open the run inspector after starting a run (wired by the app shell). */
   onOpenRun?: (runId: string) => void;
+  /** Notified with the new id after a create. When wired, the shell navigates
+   *  to the editor; otherwise the page just refreshes its own list. */
+  onCreated?: (workflowId: string) => void;
 }
 
 function describeTrigger(trigger: Trigger): string {
@@ -22,13 +26,28 @@ type LoadState =
   | { kind: "error" }
   | { kind: "ready"; items: WorkflowListItem[] };
 
-export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps): React.ReactElement {
+export function TemplatesPage({
+  client,
+  onOpen,
+  onOpenRun,
+  onCreated,
+}: TemplatesPageProps): React.ReactElement {
   const api = client ?? getApiClient();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [runMessage, setRunMessage] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [showNew, setShowNew] = useState(false);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  const handleCreated = useCallback(
+    (id: string) => {
+      setShowNew(false);
+      if (onCreated) onCreated(id);
+      else reload();
+    },
+    [onCreated, reload],
+  );
 
   useEffect(() => {
     let active = true;
@@ -123,8 +142,20 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
 
   return (
     <div style={{ padding: 16 }}>
-      <h2>Workflows</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <h2 style={{ marginRight: "auto" }}>Workflows</h2>
+        <button type="button" onClick={() => setShowNew(true)}>
+          New workflow
+        </button>
+      </div>
       {runMessage !== null && <p role="status">{runMessage}</p>}
+      {showNew && (
+        <NewWorkflowModal
+          client={api}
+          onCreated={handleCreated}
+          onCancel={() => setShowNew(false)}
+        />
+      )}
       {state.items.length === 0 ? (
         <p>No workflows yet.</p>
       ) : (

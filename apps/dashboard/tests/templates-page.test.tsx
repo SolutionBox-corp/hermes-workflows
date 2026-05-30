@@ -161,6 +161,37 @@ describe("TemplatesPage — row lifecycle actions", () => {
     expect(deleteWorkflow).not.toHaveBeenCalled();
   });
 
+  it("opens the New modal and reports the created id via onCreated", async () => {
+    const onCreated = vi.fn();
+    const createWorkflow = vi.fn(
+      async (_body: CreateWorkflowBody): Promise<SpecDetail> => ({
+        workflow: { id: "brand" } as never,
+        path: "",
+      }),
+    );
+    const client = stubClient({ listWorkflows: vi.fn(async () => items), createWorkflow });
+    render(<TemplatesPage client={client} onOpen={() => {}} onCreated={onCreated} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getByRole("button", { name: /new workflow/i }));
+    await userEvent.type(screen.getByLabelText(/^id/i), "brand");
+    await userEvent.type(screen.getByLabelText(/^name/i), "Brand");
+    await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("brand"));
+  });
+
+  it("closes the New modal on cancel", async () => {
+    const client = stubClient({ listWorkflows: vi.fn(async () => items) });
+    render(<TemplatesPage client={client} onOpen={() => {}} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getByRole("button", { name: /new workflow/i }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("exports a workflow as a YAML download", async () => {
     URL.createObjectURL = vi.fn(() => "blob:x");
     URL.revokeObjectURL = vi.fn();

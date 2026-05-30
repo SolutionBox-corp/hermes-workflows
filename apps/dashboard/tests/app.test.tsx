@@ -61,6 +61,21 @@ describe("App shell", () => {
     expect(screen.queryByText(/Editing deploy/i)).not.toBeInTheDocument();
   });
 
+  it("creates a new workflow and lands in the editor for it", async () => {
+    const createWorkflow = vi.fn(async () => ({ workflow: { id: "brand" } as never, path: "" }));
+    const getWorkflow = vi.fn(async () => detail);
+    const client = stubClient({ createWorkflow, getWorkflow });
+    render(<App client={client} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getByRole("button", { name: /new workflow/i }));
+    await userEvent.type(screen.getByLabelText(/^id/i), "brand");
+    await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
+
+    expect(await screen.findByText(/Editing brand/i)).toBeInTheDocument();
+    expect(getWorkflow).toHaveBeenCalledWith("brand");
+  });
+
   it("starts a run from templates and opens the run inspector", async () => {
     const client = stubClient();
     render(<App client={client} />);
