@@ -80,8 +80,8 @@ export { openRunsDatabase } from "./runtime/db/connection.ts";
 export { SCHEMA_SQL } from "./runtime/db/schema.ts";
 export { RunRepository } from "./runtime/db/runRepository.ts";
 export type { WorkflowSchedule, RunMeta } from "./runtime/db/runRepository.ts";
-export { SpecStore } from "./runtime/specStore.ts";
-export type { SpecSummary } from "./runtime/specStore.ts";
+export { SpecStore, SpecValidationError, chooseWriteRoot } from "./runtime/specStore.ts";
+export type { SpecSummary, SpecDetail, WriteRoots } from "./runtime/specStore.ts";
 export { ArtifactStore } from "./runtime/artifacts.ts";
 
 // Memory
