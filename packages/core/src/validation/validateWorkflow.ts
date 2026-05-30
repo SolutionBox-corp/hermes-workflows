@@ -22,6 +22,10 @@ export interface ValidationResult {
 
 const CRON_TOKEN = /^(\*|\?|\*\/\d+|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/;
 
+// The id becomes a filename (`<root>/<id>.workflow.yaml`); a slug charset keeps
+// it from escaping the storage root via path traversal.
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 function isValidCron(expr: string): boolean {
   const parts = expr.trim().split(/\s+/);
   return parts.length === 5 && parts.every((p) => CRON_TOKEN.test(p));
@@ -36,6 +40,11 @@ export function validateWorkflow(workflow: Workflow): ValidationResult {
 
   const nodes = nodeMap(workflow);
   const defaultProfile = workflow.defaults?.profile;
+
+  // Workflow id (it is also the on-disk filename — reject anything non-slug).
+  if (!ID_PATTERN.test(workflow.id)) {
+    err("invalid_id", `workflow id '${workflow.id}' must match ${String(ID_PATTERN)}`);
+  }
 
   // Unique node ids.
   const seen = new Set<string>();

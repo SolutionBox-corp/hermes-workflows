@@ -137,7 +137,11 @@ async function main(): Promise<number> {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (err) {
-    process.stderr.write(`${(err as Error).message}\n`);
+    // Structured so the Python bridge can map the error kind to an HTTP status
+    // (e.g. NotFoundError -> 404, SpecValidationError -> 400). The message stays
+    // human-readable for non-parsing callers.
+    const e = err as Error;
+    process.stderr.write(`${JSON.stringify({ error: { name: e.name, message: e.message } })}\n`);
     return 1;
   }
 }

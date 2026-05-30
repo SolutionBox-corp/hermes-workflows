@@ -25,4 +25,13 @@ server-side, with no UI yet.
 - Dashboard HTTP routes for the editor: `GET`/`PUT /workflows/{id}`,
   `POST /workflows/{id}/validate`, `.../compile-preview`, `.../run`,
   `GET /runs/{id}`, `POST /runs/{id}/cancel`, `POST /runs/{id}/retry`. Invalid
-  graphs and id mismatches return `400`; missing workflows/runs return `404`.
+  graphs and id mismatches return `400`; missing workflows/runs return `404`;
+  unexpected core failures return `500` (the core CLI emits a structured error
+  kind the bridge maps to a status).
+
+### Security
+
+- Workflow ids are validated against a slug charset, so an id can never escape
+  the storage root via path traversal when written as `<root>/<id>.workflow.yaml`.
+- Map keys (including user-controlled `agent_task.input_mapping` keys) are
+  JSON-quoted on serialization, closing a YAML-injection / round-trip break.

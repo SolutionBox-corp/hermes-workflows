@@ -29,6 +29,18 @@ function codes(workflow: Workflow): string[] {
   return validateWorkflow(workflow).errors.map((e) => e.code);
 }
 
+describe("validateWorkflow — id format", () => {
+  test("rejects an id with path-traversal characters", () => {
+    expect(codes(wf(base({ id: "../../etc/cron.d/evil" })))).toContain("invalid_id");
+    expect(codes(wf(base({ id: "a/b" })))).toContain("invalid_id");
+    expect(codes(wf(base({ id: "" })))).toContain("invalid_id");
+  });
+
+  test("accepts a normal slug id", () => {
+    expect(codes(wf(base({ id: "feature-development_2" })))).not.toContain("invalid_id");
+  });
+});
+
 describe("validateWorkflow — examples", () => {
   test("feature-development is valid (cycle is a warning, not an error)", async () => {
     const { workflow } = await loadExample("feature-development.workflow.yaml");

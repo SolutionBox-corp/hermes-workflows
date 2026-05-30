@@ -74,3 +74,14 @@ def test_retry_run_resets_it(client: TestClient) -> None:
     resp = client.post(f"/runs/{run_id}/retry")
     assert resp.status_code == 200
     assert resp.json()["status"] == "created"
+
+
+def test_retry_unknown_run_is_404(client: TestClient) -> None:
+    assert client.post("/runs/ghost/retry").status_code == 404
+
+
+def test_retry_non_failed_node_is_400(client: TestClient) -> None:
+    run_id = _start_run(client)
+    # 'plan' is scheduled (the entry node), not failed -> RetryError -> 400.
+    resp = client.post(f"/runs/{run_id}/retry", json={"node_id": "plan"})
+    assert resp.status_code == 400

@@ -75,6 +75,13 @@ describe("SpecStore write path", () => {
     expect(await readdir(globalRoot).catch(() => [])).not.toContain("saved.workflow.yaml");
   });
 
+  test("refuses to save a workflow whose id would escape the storage root", async () => {
+    const evil = workflow({ id: "../../evil" });
+    await expect(store.saveWorkflow(evil, undefined, globalRoot)).rejects.toBeInstanceOf(
+      SpecValidationError,
+    );
+  });
+
   test("getById returns null for an unknown id", async () => {
     expect(await store.getById("nope")).toBeNull();
   });

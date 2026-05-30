@@ -89,16 +89,6 @@ export class SpecStore {
     return ui === undefined ? { workflow, path: match.path } : { workflow, ui, path: match.path };
   }
 
-  /** Persist a raw spec source into the first (primary) root and return its path. */
-  async save(id: string, source: string): Promise<string> {
-    const root = this.roots[0];
-    if (root === undefined) throw new Error("SpecStore has no root to save into");
-    await mkdir(root, { recursive: true });
-    const path = join(root, `${id}.workflow.yaml`);
-    await Bun.write(path, source);
-    return path;
-  }
-
   /**
    * Validate, serialize, and write a workflow to `destRoot`, returning its path.
    * Refuses (throws {@link SpecValidationError}) if the graph has errors, so no

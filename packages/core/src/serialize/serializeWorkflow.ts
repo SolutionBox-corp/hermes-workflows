@@ -34,21 +34,25 @@ function emitMapping(obj: Record<string, unknown>, depth: number): string[] {
   const pad = INDENT.repeat(depth);
   const lines: string[] = [];
   for (const [key, value] of definedEntries(obj)) {
+    // Keys go through the same JSON-quoting as scalars: map keys can be
+    // user-controlled (e.g. agent_task.input_mapping), so quoting keeps the
+    // round-trip lossless and prevents a crafted key from injecting YAML.
+    const k = scalar(key);
     if (isScalar(value)) {
-      lines.push(`${pad}${key}: ${scalar(value)}`);
+      lines.push(`${pad}${k}: ${scalar(value)}`);
     } else if (Array.isArray(value)) {
       if (value.length === 0) {
-        lines.push(`${pad}${key}: []`);
+        lines.push(`${pad}${k}: []`);
       } else {
-        lines.push(`${pad}${key}:`);
+        lines.push(`${pad}${k}:`);
         lines.push(...emitSequence(value, depth + 1));
       }
     } else {
       const entries = definedEntries(value as Record<string, unknown>);
       if (entries.length === 0) {
-        lines.push(`${pad}${key}: {}`);
+        lines.push(`${pad}${k}: {}`);
       } else {
-        lines.push(`${pad}${key}:`);
+        lines.push(`${pad}${k}:`);
         lines.push(...emitMapping(value as Record<string, unknown>, depth + 1));
       }
     }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseWorkflow, serializeWorkflow } from "../src/index.ts";
+import { parseWorkflow, fromObject, serializeWorkflow } from "../src/index.ts";
 import type { UiLayout } from "../src/index.ts";
 import { loadExample } from "./_fixtures.ts";
 
@@ -40,6 +40,29 @@ describe("serializeWorkflow", () => {
     const round = parseWorkflow(serializeWorkflow(workflow, ui));
     expect(round.workflow).toEqual(workflow);
     expect(round.ui).toEqual(ui);
+  });
+
+  test("round-trips agent_task input_mapping keys that need escaping", () => {
+    const wf = fromObject({
+      id: "keys",
+      name: "Keys",
+      version: 1,
+      scope: { type: "global" },
+      trigger: { type: "manual" },
+      nodes: [
+        {
+          id: "a",
+          type: "agent_task",
+          prompt: "p",
+          profile: "x",
+          input_mapping: { "weird: key #c": "v1", "line\nbreak": "v2", "": "empty" },
+        },
+        { id: "done", type: "finish" },
+      ],
+      edges: [{ from: "a", to: "done" }],
+    }).workflow;
+    const round = parseWorkflow(serializeWorkflow(wf));
+    expect(round.workflow).toEqual(wf);
   });
 
   test("emits valid YAML that re-parses", () => {

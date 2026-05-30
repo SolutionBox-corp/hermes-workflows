@@ -112,7 +112,9 @@ async def save_workflow(workflow_id: str, payload: dict = Body(...)) -> dict:
             ]
         )
     except cli_bridge.CoreBridgeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if exc.kind in ("SpecValidationError", "WorkflowParseError"):
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        raise HTTPException(status_code=500, detail="failed to save workflow") from exc
     finally:
         os.unlink(tmp)
 
@@ -189,7 +191,9 @@ async def cancel_run(run_id: str) -> dict:
             [*config.core_cli(), "run-cancel", "--db", str(config.runs_db_path()), "--id", run_id]
         )
     except cli_bridge.CoreBridgeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if exc.kind == "NotFoundError":
+            raise HTTPException(status_code=404, detail=exc.detail) from exc
+        raise HTTPException(status_code=500, detail="failed to cancel run") from exc
 
 
 @router.post("/runs/{run_id}/retry")
@@ -203,7 +207,11 @@ async def retry_run(run_id: str, payload: dict = Body(default={})) -> dict:
     try:
         return cli_bridge.invoke(argv)
     except cli_bridge.CoreBridgeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if exc.kind == "NotFoundError":
+            raise HTTPException(status_code=404, detail=exc.detail) from exc
+        if exc.kind == "RetryError":
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        raise HTTPException(status_code=500, detail="failed to retry run") from exc
 
 
 @router.get("/o2b-status")

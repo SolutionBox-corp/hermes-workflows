@@ -39,23 +39,4 @@ describe("SpecStore", () => {
     const empty = new SpecStore([join(root, "does-not-exist")]);
     expect(await empty.list()).toEqual([]);
   });
-
-  test("saves a spec and reads it back", async () => {
-    const source = [
-      "id: saved-flow",
-      "name: Saved Flow",
-      "version: 1",
-      "scope:",
-      "  type: global",
-      "trigger:",
-      "  type: manual",
-      "nodes:",
-      "  - id: done",
-      "    type: finish",
-      "edges: []",
-    ].join("\n");
-    const path = await store.save("saved-flow", source);
-    expect(path.endsWith("saved-flow.workflow.yaml")).toBe(true);
-    expect((await store.load("saved-flow"))?.workflow.name).toBe("Saved Flow");
-  });
 });

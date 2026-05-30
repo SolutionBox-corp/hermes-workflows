@@ -131,9 +131,15 @@ export async function cmdSpecDelete(roots: string[], id: string): Promise<{ dele
   return { deleted: await new SpecStore(roots).deleteSpec(id) };
 }
 
+/** Thrown when a run (or other addressable resource) does not exist. Its name
+ * lets the Python bridge map it to a 404. */
+export class NotFoundError extends Error {
+  override name = "NotFoundError";
+}
+
 function loadRunOrThrow(repo: RunRepository, runId: string): RunState {
   const run = repo.loadRun(runId);
-  if (!run) throw new Error(`run '${runId}' not found`);
+  if (!run) throw new NotFoundError(`run '${runId}' not found`);
   return run;
 }
 
