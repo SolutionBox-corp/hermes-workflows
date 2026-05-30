@@ -16,10 +16,12 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from . import cli_bridge
 from .executor import NodeExecutor, select_executor
+
+_ACTIVE_STATUSES = frozenset({"created", "running", "waiting"})
 
 
 class Engine:
@@ -74,6 +76,49 @@ class Engine:
         node["seq"] = _max_seq(run) + 1
         self._save(run)
         return self.advance(spec_path, run_id)
+
+    def tick(
+        self,
+        spec_roots: Sequence[str],
+        *,
+        dispatch: Callable[[str], Any],
+        sync_tick: Callable[..., Any],
+        tick_script: str,
+        resolve_board: Callable[[dict], Optional[str]],
+    ) -> dict:
+        """One self-terminating tick: advance every active run, run a dispatcher
+        pass on each project board that has open cards, then keep the singleton
+        tick cron alive iff runs remain active. There is no persistent dispatcher
+        daemon, so advancing and dispatching are driven together each tick."""
+        advanced = self.advance_all(spec_roots)
+        active = [run for run in advanced if run.get("status") in _ACTIVE_STATUSES]
+
+        boards: list[str] = []
+        for run in active:
+            board = resolve_board(run)
+            if board and board not in boards and _has_open_card(run):
+                boards.append(board)
+        for board in boards:
+            dispatch(board)
+
+        sync_tick(active=bool(active), script=tick_script)
+        return {"advanced": advanced, "dispatched": boards, "active": bool(active)}
+
+    def advance_all(self, spec_roots: Sequence[str]) -> list[dict]:
+        """Advance every active run in one pass, resolving each run's spec by
+        workflow id across ``spec_roots``. Runs whose spec cannot be resolved are
+        skipped; terminal runs are already excluded by the active-only listing."""
+        specs = self._core(["list-specs", "--roots", ",".join(spec_roots)])
+        path_by_id = {spec["id"]: spec["path"] for spec in specs}
+        runs = self._core(["run-list", "--db", self.db_path, "--active"])
+
+        advanced: list[dict] = []
+        for run in runs:
+            spec_path = path_by_id.get(run["workflow_id"])
+            if spec_path is None:
+                continue
+            advanced.append(self.advance(spec_path, run["run_id"]))
+        return advanced
 
     def advance(self, spec_path: str, run_id: str) -> dict:
         run = self.status(run_id)
@@ -134,6 +179,13 @@ class Engine:
 
 def _max_seq(run: dict) -> int:
     return max((node.get("seq") or 0 for node in run["nodes"].values()), default=0)
+
+
+def _has_open_card(run: dict) -> bool:
+    return any(
+        node.get("status") in ("scheduled", "running") and node.get("hermes_task_id")
+        for node in run["nodes"].values()
+    )
 
 
 class _temp_json:

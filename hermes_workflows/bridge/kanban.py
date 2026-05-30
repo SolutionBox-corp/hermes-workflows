@@ -17,13 +17,30 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from hermes_cli import kanban_db as kb
 
 _WORKFLOW_COLUMNS = ("workflow_template_id", "current_step_key")
 CREATED_BY = "hermes-workflows"
+
+
+def dispatch_board(
+    board: str,
+    *,
+    run: Callable[..., Any] = subprocess.run,
+    hermes_bin: str = "hermes",
+) -> Any:
+    """Run one native dispatcher pass on ``board`` (reclaim stale, promote ready,
+    spawn workers). We never write our own worker loop; Hermes owns dispatch and
+    its concurrency caps (``kanban.max_in_progress[_per_profile]``)."""
+    return run(
+        [hermes_bin, "kanban", "--board", board, "dispatch", "--json"],
+        capture_output=True,
+        text=True,
+    )
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
