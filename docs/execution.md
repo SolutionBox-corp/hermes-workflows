@@ -64,12 +64,20 @@ is actually awaiting review):
 
 ## Notifications
 
-Run-lifecycle notices deliver to the run's captured **origin** when present,
-else to a configured default target (`HERMES_WORKFLOWS_DELIVER`), else stay
-silent. Origins and targets are opaque `<platform>:<chat>[:<thread>]` strings
-that Hermes' native delivery interprets — nothing here branches on the platform.
-Kanban-backed nodes additionally subscribe their origin to the card's
-terminal-state events via the native notifier.
+The notification contract is channel-agnostic: a target is the run's captured
+**origin** when present, else a configured default (`HERMES_WORKFLOWS_DELIVER`),
+else nothing (stay silent). Origins and targets are opaque
+`<platform>:<chat>[:<thread>]` strings that Hermes' native delivery interprets —
+nothing branches on the platform. The resolution and the Kanban-notifier
+subscription (`subscribe_task`) are implemented and unit-tested in
+`notifications.py`.
+
+> **Status: contract only, not yet wired into the live run path.** Runs do not
+> yet capture an `origin`, and run-lifecycle delivery (a notice on
+> completed/failed/review-needed) is not hooked into `advance`. So today a run
+> does not actively send a notice on its own. Wiring it requires origin capture
+> on the run plus a run-lifecycle send; that is a deliberate next step, tracked
+> separately — the module is built so the wiring is a small, isolated change.
 
 ## Limits
 
@@ -79,6 +87,14 @@ terminal-state events via the native notifier.
 - **DirectExecutor output cap.** Captured stdout/stderr is clipped to 100,000
   characters before it is persisted, so a runaway worker cannot bloat the run
   store.
+- **A global node blocks the tick for its duration.** `DirectExecutor.schedule`
+  runs the profile runner synchronously, and `advance_all` processes runs
+  serially, so a single slow global node holds up the advancement of every other
+  active run (and the cron tick itself) until it returns or hits its timeout.
+  This is acceptable for the current global workloads (short, periodic jobs); if
+  global nodes grow long-running, switch the Direct backend to a detached spawn
+  whose `poll` reads the result later. Project (Kanban) runs are unaffected —
+  their workers are spawned out-of-band by the gateway dispatcher.
 - **`kind: hermes` profiles under the Direct backend.** The Direct backend
   invokes a profile *runner* executable and captures its stdout. Profiles whose
   runner is a long-lived `hermes`-kind agent (rather than a one-shot runner that
