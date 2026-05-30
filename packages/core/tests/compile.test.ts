@@ -29,6 +29,13 @@ describe("compileToHermesPlan", () => {
     expect(implement?.workspace).toBe("worktree");
     expect(plan.profiles).toContain("qa-engineer");
     expect(plan.memory).toEqual({ provider: "auto", fail_open: true });
+    expect(plan.scope).toEqual({ type: "project" });
+  });
+
+  test("a global workflow carries its scope through to the plan", async () => {
+    const { workflow } = await loadExample("blog-daily-signals.workflow.yaml");
+    const plan = compileToHermesPlan(workflow);
+    expect(plan.scope.type).toBe("global");
   });
 
   test("blog-daily-signals compiles a cron job", async () => {

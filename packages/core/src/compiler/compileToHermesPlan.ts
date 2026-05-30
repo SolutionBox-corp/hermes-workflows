@@ -4,7 +4,7 @@
  * "compile preview" and the `compile-preview` CLI command.
  */
 
-import type { Workflow, Trigger, MemoryProviderKind } from "../schema/workflow.ts";
+import type { Workflow, Trigger, MemoryProviderKind, Scope } from "../schema/workflow.ts";
 import { entryNodes } from "../schema/graph.ts";
 
 export interface CompiledKanbanTask {
@@ -31,6 +31,7 @@ export interface CompiledCronJob {
 
 export interface HermesPlan {
   workflow_id: string;
+  scope: Scope;
   trigger: Trigger;
   first_node: string | null;
   kanban_tasks: CompiledKanbanTask[];
@@ -86,6 +87,7 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
 
   return {
     workflow_id: workflow.id,
+    scope: workflow.scope,
     trigger: workflow.trigger,
     first_node: entry ? entry.id : null,
     kanban_tasks,

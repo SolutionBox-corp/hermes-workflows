@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from . import cli_bridge
-from .bridge import kanban
+from .executor import NodeExecutor, select_executor
 
 
 class Engine:
@@ -28,11 +28,13 @@ class Engine:
         *,
         core_cli: Sequence[str],
         db_path: str,
-        board_conn: Any,
+        kanban: Optional[NodeExecutor] = None,
+        direct: Optional[NodeExecutor] = None,
     ) -> None:
         self.core_cli = list(core_cli)
         self.db_path = db_path
-        self.board_conn = board_conn
+        self.kanban = kanban
+        self.direct = direct
 
     # --- core CLI helpers -------------------------------------------------
 
@@ -77,11 +79,12 @@ class Engine:
         run = self.status(run_id)
         plan = self._core(["compile-preview", spec_path])
         task_params = {task["node"]: task for task in plan["kanban_tasks"]}
+        executor = self._select(plan["scope"]["type"])
 
         seq = _max_seq(run)
         for node in run["nodes"].values():
             if node.get("status") in ("scheduled", "running") and node.get("hermes_task_id"):
-                completion = kanban.read_completion(self.board_conn, node["hermes_task_id"])
+                completion = executor.poll(node["hermes_task_id"])
                 if completion.settled and completion.outcome is not None:
                     seq += 1
                     node["status"] = "completed"
@@ -95,34 +98,37 @@ class Engine:
             run["nodes"][node_id]["status"] = status
 
         for node_id in decision["schedule"]:
-            self._create_card(run, run_id, node_id, task_params.get(node_id))
+            self._schedule_node(executor, run, run_id, node_id, task_params.get(node_id))
 
         run["status"] = decision["run_status"]
         self._save(run)
         return run
 
-    def _create_card(
-        self, run: dict, run_id: str, node_id: str, params: Optional[dict]
+    def _select(self, scope_type: str) -> NodeExecutor:
+        executor = select_executor(scope_type, kanban=self.kanban, direct=self.direct)
+        if executor is None:
+            raise ValueError(f"no executor configured for scope '{scope_type}'")
+        return executor
+
+    def _schedule_node(
+        self,
+        executor: NodeExecutor,
+        run: dict,
+        run_id: str,
+        node_id: str,
+        params: Optional[dict],
     ) -> None:
         if params is None:
             return
         node = run["nodes"][node_id]
-        task_id = kanban.create_node_task(
-            self.board_conn,
+        handle = executor.schedule(
             run_id=run_id,
             node_id=node_id,
             workflow_id=run["workflow_id"],
-            title=params.get("title") or node_id,
-            prompt=params.get("prompt", ""),
-            assignee=params.get("assignee") or "",
-            model=params.get("model"),
-            skills=params.get("skills"),
-            max_retries=params.get("max_retries"),
-            workspace=params.get("workspace") or "scratch",
-            timeout_seconds=params.get("timeout_seconds"),
+            params=params,
             iteration=node.get("seq", 0),
         )
-        node["hermes_task_id"] = task_id
+        node["hermes_task_id"] = handle
         node["status"] = "scheduled"
 
 

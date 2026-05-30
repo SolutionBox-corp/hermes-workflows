@@ -11,6 +11,7 @@ kb = pytest.importorskip("hermes_cli.kanban_db")
 
 from hermes_workflows import tools
 from hermes_workflows.engine import Engine
+from hermes_workflows.executor import KanbanExecutor
 
 ROOT = Path(__file__).resolve().parents[2]
 CLI = ["bun", "run", str(ROOT / "packages" / "core" / "src" / "cli.ts")]
@@ -20,7 +21,7 @@ EXAMPLES = str(ROOT / "examples")
 @pytest.fixture()
 def engine(tmp_path: Path):
     board = kb.connect(db_path=tmp_path / "kanban.db")
-    eng = Engine(core_cli=CLI, db_path=str(tmp_path / "runs.db"), board_conn=board)
+    eng = Engine(core_cli=CLI, db_path=str(tmp_path / "runs.db"), kanban=KanbanExecutor(board))
     yield eng
     board.close()
 

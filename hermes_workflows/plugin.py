@@ -115,6 +115,11 @@ def _build_engine() -> Any:
 
     from . import config
     from .engine import Engine
+    from .executor import KanbanExecutor
 
     board = kb.connect(board=config.runtime_board())
-    return Engine(core_cli=config.core_cli(), db_path=str(config.runs_db_path()), board_conn=board)
+    return Engine(
+        core_cli=config.core_cli(),
+        db_path=str(config.runs_db_path()),
+        kanban=KanbanExecutor(board),
+    )
