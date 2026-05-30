@@ -45,6 +45,11 @@ export type {
 // Loading
 export { parseWorkflow, fromObject, WorkflowParseError } from "./schema/load.ts";
 export type { LoadResult } from "./schema/load.ts";
+export { parseUi } from "./schema/ui.ts";
+export type { UiLayout, XyflowLayout, XyflowNodeLayout, Viewport } from "./schema/ui.ts";
+
+// Serialization
+export { serializeWorkflow } from "./serialize/serializeWorkflow.ts";
 
 // Graph helpers
 export { nodeMap, outgoingEdges, incomingEdges, entryNodes, reachableFrom } from "./schema/graph.ts";
@@ -65,6 +70,7 @@ export {
 } from "./runtime/state.ts";
 export { advance, selectOutgoing } from "./runtime/advance.ts";
 export type { AdvanceResult } from "./runtime/advance.ts";
+export { cancelRun, retryRun, RetryError } from "./runtime/runMutations.ts";
 
 // Compiler
 export { compileToHermesPlan } from "./compiler/compileToHermesPlan.ts";
@@ -75,8 +81,8 @@ export { openRunsDatabase } from "./runtime/db/connection.ts";
 export { SCHEMA_SQL } from "./runtime/db/schema.ts";
 export { RunRepository } from "./runtime/db/runRepository.ts";
 export type { WorkflowSchedule, RunMeta } from "./runtime/db/runRepository.ts";
-export { SpecStore } from "./runtime/specStore.ts";
-export type { SpecSummary } from "./runtime/specStore.ts";
+export { SpecStore, SpecValidationError, chooseWriteRoot } from "./runtime/specStore.ts";
+export type { SpecSummary, SpecDetail, WriteRoots } from "./runtime/specStore.ts";
 export { ArtifactStore } from "./runtime/artifacts.ts";
 
 // Memory

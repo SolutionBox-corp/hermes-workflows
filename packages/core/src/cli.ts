@@ -17,7 +17,14 @@ import {
   cmdRunSave,
   cmdRunList,
   cmdListSpecs,
+  cmdSpecGet,
+  cmdSpecSave,
+  cmdSpecCreate,
+  cmdSpecDelete,
+  cmdRunCancel,
+  cmdRunRetry,
 } from "./cli/commands.ts";
+import type { WriteRoots } from "./runtime/specStore.ts";
 
 interface Flags {
   _: string[];
@@ -53,6 +60,24 @@ async function readRunFile(path: string): Promise<RunState> {
   return JSON.parse(await Bun.file(path).text()) as RunState;
 }
 
+async function readJsonFile(path: string): Promise<unknown> {
+  return JSON.parse(await Bun.file(path).text());
+}
+
+function rootsOf(flags: Flags): string[] {
+  return (str(flags, "roots") ?? "").split(",").filter((r) => r.length > 0);
+}
+
+function writeRootsOf(flags: Flags): WriteRoots {
+  const global = required(str(flags, "global-root"), "--global-root");
+  const roots: WriteRoots = { global };
+  const templates = str(flags, "templates-root");
+  if (templates !== undefined) roots.templates = templates;
+  const project = str(flags, "project-root");
+  if (project !== undefined) roots.project = project;
+  return roots;
+}
+
 async function dispatch(command: string | undefined, flags: Flags): Promise<unknown> {
   const spec = flags._[0];
   const db = str(flags, "db"); // optional here; commands that need it pass it through required()
@@ -79,6 +104,18 @@ async function dispatch(command: string | undefined, flags: Flags): Promise<unkn
       return { ok: true };
     case "run-list":
       return cmdRunList(required(db, "--db"), flags["active"] === true);
+    case "spec-get":
+      return cmdSpecGet(rootsOf(flags), required(str(flags, "id"), "--id"));
+    case "spec-save":
+      return cmdSpecSave(rootsOf(flags), await readJsonFile(required(str(flags, "spec-file"), "--spec-file")), writeRootsOf(flags));
+    case "spec-create":
+      return cmdSpecCreate(rootsOf(flags), await readJsonFile(required(str(flags, "spec-file"), "--spec-file")), writeRootsOf(flags));
+    case "spec-delete":
+      return cmdSpecDelete(rootsOf(flags), required(str(flags, "id"), "--id"));
+    case "run-cancel":
+      return cmdRunCancel(required(db, "--db"), required(str(flags, "id"), "--id"));
+    case "run-retry":
+      return cmdRunRetry(required(db, "--db"), required(str(flags, "id"), "--id"), str(flags, "node"));
     default:
       throw new Error(`unknown command: ${command ?? "(none)"}`);
   }
@@ -100,7 +137,11 @@ async function main(): Promise<number> {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (err) {
-    process.stderr.write(`${(err as Error).message}\n`);
+    // Structured so the Python bridge can map the error kind to an HTTP status
+    // (e.g. NotFoundError -> 404, SpecValidationError -> 400). The message stays
+    // human-readable for non-parsing callers.
+    const e = err as Error;
+    process.stderr.write(`${JSON.stringify({ error: { name: e.name, message: e.message } })}\n`);
     return 1;
   }
 }

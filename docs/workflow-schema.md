@@ -23,6 +23,24 @@ edges: [ ... ]
 ui: { xyflow: { ... } }        # optional, ignored by execution
 ```
 
+## UI layout (optional)
+
+The `ui` block carries the editor's visual layout and is strictly separated from
+execution — a spec without it still loads and runs. It is parsed into a typed,
+lenient shape (malformed entries are dropped, never raised):
+
+```yaml
+ui:
+  xyflow:
+    nodes:                       # canvas position per workflow node id
+      - { id: plan, x: 100, y: 80 }
+      - { id: done, x: 400, y: 80 }
+    viewport: { x: 0, y: 0, zoom: 1 }
+```
+
+The serializer round-trips `ui` losslessly, so saving from the editor preserves
+layout. Validation ignores `ui` entirely.
+
 ## Triggers
 
 - `manual` — started via the `workflow_run` tool, the CLI, or the dashboard.
