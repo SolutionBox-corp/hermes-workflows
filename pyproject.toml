@@ -16,7 +16,7 @@ authors = [{ name = "Hermes Workflows contributors" }]
 dependencies = []
 
 [tool.setuptools]
-packages = ["hermes_workflows", "hermes_workflows.bridge"]
+packages = ["hermes_workflows", "hermes_workflows.bridge", "hermes_workflows.executor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
