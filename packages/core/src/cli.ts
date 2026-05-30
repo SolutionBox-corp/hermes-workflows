@@ -21,6 +21,8 @@ import {
   cmdSpecSave,
   cmdSpecCreate,
   cmdSpecDelete,
+  cmdRunCancel,
+  cmdRunRetry,
 } from "./cli/commands.ts";
 import type { WriteRoots } from "./runtime/specStore.ts";
 
@@ -110,6 +112,10 @@ async function dispatch(command: string | undefined, flags: Flags): Promise<unkn
       return cmdSpecCreate(rootsOf(flags), await readJsonFile(required(str(flags, "spec-file"), "--spec-file")), writeRootsOf(flags));
     case "spec-delete":
       return cmdSpecDelete(rootsOf(flags), required(str(flags, "id"), "--id"));
+    case "run-cancel":
+      return cmdRunCancel(required(db, "--db"), required(str(flags, "id"), "--id"));
+    case "run-retry":
+      return cmdRunRetry(required(db, "--db"), required(str(flags, "id"), "--id"), str(flags, "node"));
     default:
       throw new Error(`unknown command: ${command ?? "(none)"}`);
   }

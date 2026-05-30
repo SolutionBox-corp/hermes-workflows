@@ -70,6 +70,7 @@ export {
 } from "./runtime/state.ts";
 export { advance, selectOutgoing } from "./runtime/advance.ts";
 export type { AdvanceResult } from "./runtime/advance.ts";
+export { cancelRun, retryRun, RetryError } from "./runtime/runMutations.ts";
 
 // Compiler
 export { compileToHermesPlan } from "./compiler/compileToHermesPlan.ts";

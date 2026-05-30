@@ -15,6 +15,7 @@ import type { HermesPlan } from "../compiler/compileToHermesPlan.ts";
 import { advance } from "../runtime/advance.ts";
 import type { AdvanceResult } from "../runtime/advance.ts";
 import { createRunState } from "../runtime/state.ts";
+import { cancelRun, retryRun } from "../runtime/runMutations.ts";
 import { openRunsDatabase } from "../runtime/db/connection.ts";
 import { RunRepository } from "../runtime/db/runRepository.ts";
 import { SpecStore, chooseWriteRoot } from "../runtime/specStore.ts";
@@ -128,4 +129,24 @@ export async function cmdSpecCreate(
 
 export async function cmdSpecDelete(roots: string[], id: string): Promise<{ deleted: boolean }> {
   return { deleted: await new SpecStore(roots).deleteSpec(id) };
+}
+
+function loadRunOrThrow(repo: RunRepository, runId: string): RunState {
+  const run = repo.loadRun(runId);
+  if (!run) throw new Error(`run '${runId}' not found`);
+  return run;
+}
+
+export function cmdRunCancel(dbPath: string, runId: string): RunState {
+  const repo = repository(dbPath);
+  const cancelled = cancelRun(loadRunOrThrow(repo, runId));
+  repo.saveRun(cancelled);
+  return cancelled;
+}
+
+export function cmdRunRetry(dbPath: string, runId: string, node?: string): RunState {
+  const repo = repository(dbPath);
+  const retried = retryRun(loadRunOrThrow(repo, runId), node !== undefined ? { node } : {});
+  repo.saveRun(retried);
+  return retried;
 }
