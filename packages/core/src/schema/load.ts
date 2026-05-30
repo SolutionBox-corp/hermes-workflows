@@ -22,6 +22,8 @@ import type {
   FinishNode,
   ReviewOption,
 } from "./nodes.ts";
+import { parseUi } from "./ui.ts";
+import type { UiLayout } from "./ui.ts";
 
 export class WorkflowParseError extends Error {
   override name = "WorkflowParseError";
@@ -29,7 +31,7 @@ export class WorkflowParseError extends Error {
 
 export interface LoadResult {
   workflow: Workflow;
-  ui?: unknown;
+  ui?: UiLayout;
 }
 
 const NODE_TYPES = new Set(["agent_task", "condition", "human_review", "finish"]);
@@ -66,7 +68,7 @@ export function parseWorkflow(source: string): LoadResult {
 /** Build a typed workflow from an already-parsed object. */
 export function fromObject(raw: unknown): LoadResult {
   if (!isRecord(raw)) fail("workflow spec must be a mapping");
-  const { ui, ...rest } = raw;
+  const { ui: rawUi, ...rest } = raw;
   const workflow: Workflow = {
     id: str(rest["id"], "id"),
     name: str(rest["name"], "name"),
@@ -77,6 +79,7 @@ export function fromObject(raw: unknown): LoadResult {
     nodes: parseNodes(rest["nodes"]),
     edges: parseEdges(rest["edges"]),
   };
+  const ui = parseUi(rawUi);
   return ui === undefined ? { workflow } : { workflow, ui };
 }
 

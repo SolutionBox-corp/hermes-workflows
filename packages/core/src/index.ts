@@ -45,6 +45,8 @@ export type {
 // Loading
 export { parseWorkflow, fromObject, WorkflowParseError } from "./schema/load.ts";
 export type { LoadResult } from "./schema/load.ts";
+export { parseUi } from "./schema/ui.ts";
+export type { UiLayout, XyflowLayout, XyflowNodeLayout, Viewport } from "./schema/ui.ts";
 
 // Graph helpers
 export { nodeMap, outgoingEdges, incomingEdges, entryNodes, reachableFrom } from "./schema/graph.ts";
