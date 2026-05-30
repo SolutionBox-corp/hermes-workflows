@@ -14,12 +14,16 @@ the spec is interpreted in exactly one place (TypeScript).
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from . import cli_bridge
-from .bridge import kanban
+from .executor import NodeExecutor
+
+_ACTIVE_STATUSES = frozenset({"created", "running", "waiting"})
+REVIEW_OPTIONS = frozenset({"approved", "rejected", "needs_changes"})
 
 
 class Engine:
@@ -28,11 +32,17 @@ class Engine:
         *,
         core_cli: Sequence[str],
         db_path: str,
-        board_conn: Any,
+        kanban: Optional[NodeExecutor] = None,
+        direct: Optional[NodeExecutor] = None,
+        kanban_factory: Optional[Callable[[str], NodeExecutor]] = None,
     ) -> None:
         self.core_cli = list(core_cli)
         self.db_path = db_path
-        self.board_conn = board_conn
+        # `kanban` is the fallback board executor for project runs with no bound
+        # project; `kanban_factory(slug)` binds a project run to its own board.
+        self.kanban = kanban
+        self.direct = direct
+        self.kanban_factory = kanban_factory
 
     # --- core CLI helpers -------------------------------------------------
 
@@ -66,22 +76,88 @@ class Engine:
         return run
 
     def decide_review(self, spec_path: str, run_id: str, node_id: str, decision: str) -> dict:
+        if decision not in REVIEW_OPTIONS:
+            raise ValueError(
+                f"invalid review decision '{decision}'; expected one of {sorted(REVIEW_OPTIONS)}"
+            )
         run = self.status(run_id)
-        node = run["nodes"][node_id]
+        node = run["nodes"].get(node_id)
+        if node is None:
+            raise ValueError(f"unknown node '{node_id}' in run '{run_id}'")
+        if node.get("status") != "waiting_for_review":
+            raise ValueError(f"node '{node_id}' is not awaiting review")
         node["review_decision"] = decision
         node["seq"] = _max_seq(run) + 1
         self._save(run)
         return self.advance(spec_path, run_id)
 
+    def tick(
+        self,
+        spec_roots: Sequence[str],
+        *,
+        sync_tick: Callable[..., Any],
+        tick_script: str,
+        dispatch: Optional[Callable[[str], Any]] = None,
+        resolve_board: Optional[Callable[[dict], Optional[str]]] = None,
+    ) -> dict:
+        """One self-terminating tick: advance every active run, then keep the
+        singleton tick cron alive iff runs remain active.
+
+        Worker spawning is normally the gateway's embedded dispatcher's job — it
+        ticks every board on disk — so the tick only drives the workflow graph
+        forward. For deployments that disable the gateway dispatcher
+        (``kanban.dispatch_in_gateway=false``), pass ``dispatch`` + ``resolve_board``
+        to run an explicit per-board dispatcher pass for boards with open cards."""
+        advanced = self.advance_all(spec_roots)
+        active = [run for run in advanced if run.get("status") in _ACTIVE_STATUSES]
+
+        boards: list[str] = []
+        if dispatch is not None and resolve_board is not None:
+            for run in active:
+                board = resolve_board(run)
+                if board and board not in boards and _has_open_card(run):
+                    boards.append(board)
+            for board in boards:
+                dispatch(board)
+
+        sync_tick(active=bool(active), script=tick_script)
+        return {"advanced": advanced, "dispatched": boards, "active": bool(active)}
+
+    def advance_all(self, spec_roots: Sequence[str]) -> list[dict]:
+        """Advance every active run in one pass, resolving each run's spec by
+        workflow id across ``spec_roots``. Runs whose spec cannot be resolved are
+        skipped; terminal runs are already excluded by the active-only listing."""
+        specs = self._core(["list-specs", "--roots", ",".join(spec_roots)])
+        path_by_id = {spec["id"]: spec["path"] for spec in specs}
+        runs = self._core(["run-list", "--db", self.db_path, "--active"])
+
+        advanced: list[dict] = []
+        for run in runs:
+            spec_path = path_by_id.get(run["workflow_id"])
+            if spec_path is None:
+                continue
+            try:
+                advanced.append(self.advance(spec_path, run["run_id"]))
+            except Exception as exc:  # noqa: BLE001 - one bad run must not wedge the tick
+                # Unattended: a single failing run (misconfigured backend, missing
+                # runner, transient error) is isolated so every other active run
+                # still advances. Surfaced on stderr, which lands in the tick log.
+                print(
+                    f"hermes-workflows: advance failed for run {run['run_id']}: {exc}",
+                    file=sys.stderr,
+                )
+        return advanced
+
     def advance(self, spec_path: str, run_id: str) -> dict:
         run = self.status(run_id)
         plan = self._core(["compile-preview", spec_path])
         task_params = {task["node"]: task for task in plan["kanban_tasks"]}
+        executor = self._executor_for(plan["scope"], run)
 
         seq = _max_seq(run)
         for node in run["nodes"].values():
             if node.get("status") in ("scheduled", "running") and node.get("hermes_task_id"):
-                completion = kanban.read_completion(self.board_conn, node["hermes_task_id"])
+                completion = executor.poll(node["hermes_task_id"])
                 if completion.settled and completion.outcome is not None:
                     seq += 1
                     node["status"] = "completed"
@@ -95,39 +171,63 @@ class Engine:
             run["nodes"][node_id]["status"] = status
 
         for node_id in decision["schedule"]:
-            self._create_card(run, run_id, node_id, task_params.get(node_id))
+            self._schedule_node(executor, run, run_id, node_id, task_params.get(node_id))
 
         run["status"] = decision["run_status"]
         self._save(run)
         return run
 
-    def _create_card(
-        self, run: dict, run_id: str, node_id: str, params: Optional[dict]
+    def _executor_for(self, scope: dict, run: dict) -> NodeExecutor:
+        scope_type = scope.get("type", "")
+        if scope_type == "global":
+            return self._require(self.direct, scope_type)
+        if scope_type in ("project", "projects"):
+            slug = run.get("project_id") or _first(scope.get("projects"))
+            if slug and self.kanban_factory is not None:
+                return self.kanban_factory(slug)
+            return self._require(self.kanban, scope_type)
+        raise ValueError(f"unknown scope type '{scope_type}'")
+
+    def _require(self, executor: Optional[NodeExecutor], scope_type: str) -> NodeExecutor:
+        if executor is None:
+            raise ValueError(f"no executor configured for scope '{scope_type}'")
+        return executor
+
+    def _schedule_node(
+        self,
+        executor: NodeExecutor,
+        run: dict,
+        run_id: str,
+        node_id: str,
+        params: Optional[dict],
     ) -> None:
         if params is None:
             return
         node = run["nodes"][node_id]
-        task_id = kanban.create_node_task(
-            self.board_conn,
+        handle = executor.schedule(
             run_id=run_id,
             node_id=node_id,
             workflow_id=run["workflow_id"],
-            title=params.get("title") or node_id,
-            prompt=params.get("prompt", ""),
-            assignee=params.get("assignee") or "",
-            model=params.get("model"),
-            skills=params.get("skills"),
-            max_retries=params.get("max_retries"),
-            workspace=params.get("workspace") or "scratch",
-            timeout_seconds=params.get("timeout_seconds"),
+            params=params,
             iteration=node.get("seq", 0),
         )
-        node["hermes_task_id"] = task_id
+        node["hermes_task_id"] = handle
         node["status"] = "scheduled"
 
 
 def _max_seq(run: dict) -> int:
     return max((node.get("seq") or 0 for node in run["nodes"].values()), default=0)
+
+
+def _first(items: Optional[Sequence[str]]) -> Optional[str]:
+    return items[0] if items else None
+
+
+def _has_open_card(run: dict) -> bool:
+    return any(
+        node.get("status") in ("scheduled", "running") and node.get("hermes_task_id")
+        for node in run["nodes"].values()
+    )
 
 
 class _temp_json:

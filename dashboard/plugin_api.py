@@ -1,14 +1,14 @@
-"""Dashboard plugin backend — read-only. Mounted at /api/plugins/workflows/ by
-the Hermes dashboard runtime. Lists workflows and active runs and reports O2B
-availability. No mutation: editing is human-only via CLI (the visual editor is
-a later phase)."""
+"""Dashboard plugin backend. Mounted at /api/plugins/workflows/ by the Hermes
+dashboard runtime. Lists workflows and active runs, reports O2B availability,
+and exposes the single human-in-the-loop write: resolving a human_review node.
+Graph editing remains human-only via CLI (the visual editor is a later phase)."""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body, HTTPException
 
 router = APIRouter()
 
@@ -36,6 +36,28 @@ async def list_runs() -> dict:
             for r in runs
         ]
     }
+
+
+@router.post("/runs/{run_id}/review")
+async def review_run(
+    run_id: str, node_id: str = Body(...), decision: str = Body(...)
+) -> dict:
+    """Resolve a human_review node and advance the run. Same channel-agnostic
+    resolution the model tool and CLI use; an invalid decision is a 400."""
+    from hermes_workflows import config, tools
+    from hermes_workflows.cli import build_engine
+
+    try:
+        return tools.review_workflow(
+            run_id,
+            node_id,
+            decision,
+            engine=build_engine(),
+            roots=config.spec_roots(),
+            core_cli=config.core_cli(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/o2b-status")

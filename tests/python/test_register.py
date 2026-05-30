@@ -1,4 +1,4 @@
-"""E4.1 — the plugin entrypoint registers the four model tools and stays lazy
+"""E4.1 — the plugin entrypoint registers the model tools and stays lazy
 (the heavy engine is not imported at registration time)."""
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ class StubContext:
         self.tools[name] = {"toolset": toolset, "schema": schema, "handler": handler, **kwargs}
 
 
-def test_registers_the_four_model_tools() -> None:
+def test_registers_the_model_tools() -> None:
     ctx = StubContext()
     register(ctx)
     assert set(ctx.tools) == {
@@ -25,6 +25,7 @@ def test_registers_the_four_model_tools() -> None:
         "workflow_run",
         "workflow_status",
         "workflow_explain",
+        "workflow_review",
     }
     for tool in ctx.tools.values():
         assert tool["toolset"] == TOOLSET

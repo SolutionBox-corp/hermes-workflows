@@ -4,7 +4,7 @@ Hermes Workflows compiles a workflow graph onto native Hermes primitives. It is
 a thin orchestration layer, not a separate engine.
 
 ```text
-@xyflow editor (later)        model tools (workflow_list/run/status/explain)
+@xyflow editor (later)   model tools (workflow_list/run/status/explain/review)
         |                                   |
    workflow specs (YAML/JSON)               |
         |                                   v
@@ -27,26 +27,38 @@ a thin orchestration layer, not a separate engine.
   Hermes. It drives the core CLI via `cli_bridge` for pure decisions and
   persistence, and performs Kanban/Cron/Profiles I/O through the bridges. The
   spec is therefore interpreted in exactly one place (TypeScript).
-- **Plugin shell (`__init__.py`, `plugin.yaml`)** registers four model tools
-  with lazy handlers; the engine is not imported at startup, and no O2B
-  detection runs at load.
-- **Dashboard (`dashboard/`)** is a read-only Workflows tab (manifest +
-  `plugin_api.py` + a build-free bundle).
+- **Plugin shell (`__init__.py`, `plugin.yaml`)** registers five model tools
+  (`workflow_list/run/status/explain/review`) with lazy handlers; the engine is
+  not imported at startup, and no O2B detection runs at load.
+- **Dashboard (`dashboard/`)** is the Workflows tab (manifest + `plugin_api.py`
+  + a build-free bundle): read-only listing plus the one human-in-the-loop
+  write, `POST /runs/{id}/review`.
+- **Execution backends (`hermes_workflows/executor`)** sit behind a `schedule`/
+  `poll` seam: project runs schedule durable Kanban cards on their project
+  board; global runs invoke the profile runner directly with no card. See
+  [execution.md](execution.md).
 
 ## Execution model
 
 A run advances durably. Each tick:
 
-1. ingest completions for active `agent_task` cards from native `task_runs`,
+1. ingest completions for active nodes through the run's execution backend,
 2. ask the core for the next scheduling decision (`advance`, pure),
-3. create Kanban cards for newly scheduled nodes,
+3. schedule newly ready nodes through that backend,
 4. persist the run to `runs.db`.
 
-Advancement is driven by a transient Cron tick — a single named job created
-while runs are active and removed when none remain, so tick jobs never
-accumulate. `advance` is idempotent: a repeated tick never duplicates work
-(native `idempotency_key`), and loop edges (fix to validate) re-run a node on a
-fresh card keyed by iteration.
+The backend is chosen by workflow scope: a project run uses the Kanban backend
+(durable cards on the project's board); a global run uses the Direct backend
+(profile runner, no card). Worker spawning is **not** the plugin's job — the
+Hermes gateway hosts an embedded dispatcher that ticks every board on disk and
+spawns workers for ready cards, governed by `kanban.max_in_progress[_per_profile]`.
+
+Advancement itself is driven by a transient Cron tick (`hermes-workflows
+advance-all`) — a single named job created while runs are active and removed
+when none remain, so tick jobs never accumulate. `advance` is idempotent: a
+repeated tick never duplicates work (native `idempotency_key`), and loop edges
+(fix to validate) re-run a node on a fresh card keyed by iteration. See
+[execution.md](execution.md) for backend details and limits.
 
 ## Native Hermes mapping
 

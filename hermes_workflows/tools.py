@@ -53,6 +53,23 @@ def run_workflow(
     return {"run_id": run_id, "status": run["status"]}
 
 
+def review_workflow(
+    run_id: str,
+    node_id: str,
+    decision: str,
+    *,
+    engine: Any,
+    roots: Sequence[str],
+    core_cli: Sequence[str],
+) -> dict:
+    """Resolve a human_review node and advance the run. Channel-agnostic: the
+    same resolution the CLI and dashboard use. Invalid decisions raise."""
+    run = engine.status(run_id)
+    path = _resolve_spec_path(run["workflow_id"], roots, core_cli)
+    resolved = engine.decide_review(path, run_id, node_id, decision)
+    return {"run_id": run_id, "status": resolved["status"], "decision": decision}
+
+
 def workflow_status(run_id: str, *, engine: Any) -> dict:
     run = engine.status(run_id)
     current = next(

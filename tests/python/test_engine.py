@@ -13,10 +13,12 @@ import pytest
 kb = pytest.importorskip("hermes_cli.kanban_db")
 
 from hermes_workflows.engine import Engine
+from hermes_workflows.executor import DirectExecutor, KanbanExecutor
 
 ROOT = Path(__file__).resolve().parents[2]
 CLI = ROOT / "packages" / "core" / "src" / "cli.ts"
 SPEC = ROOT / "examples" / "feature-development.workflow.yaml"
+GLOBAL_SPEC = ROOT / "examples" / "blog-daily-signals.workflow.yaml"
 
 
 @pytest.fixture()
@@ -25,7 +27,7 @@ def engine(tmp_path: Path):
     eng = Engine(
         core_cli=["bun", "run", str(CLI)],
         db_path=str(tmp_path / "runs.db"),
-        board_conn=board,
+        kanban=KanbanExecutor(board),
     )
     yield eng
     board.close()
@@ -64,7 +66,7 @@ def test_full_happy_path_to_finish(engine: Engine) -> None:
 
     # plan -> implement -> validate
     for step in ("plan", "implement", "validate"):
-        _complete(engine.board_conn, _node(run, step)["hermes_task_id"])
+        _complete(engine.kanban.board_conn, _node(run, step)["hermes_task_id"])
         run = engine.advance(str(SPEC), "run-1")
 
     # validate succeeded -> human review is waiting
@@ -74,7 +76,7 @@ def test_full_happy_path_to_finish(engine: Engine) -> None:
     run = engine.decide_review(str(SPEC), "run-1", "review", "approved")
     assert _node(run, "release_notes")["status"] == "scheduled"
 
-    _complete(engine.board_conn, _node(run, "release_notes")["hermes_task_id"])
+    _complete(engine.kanban.board_conn, _node(run, "release_notes")["hermes_task_id"])
     run = engine.advance(str(SPEC), "run-1")
     assert run["status"] == "completed"
 
@@ -82,17 +84,54 @@ def test_full_happy_path_to_finish(engine: Engine) -> None:
 def test_fix_loop_reruns_validate(engine: Engine) -> None:
     run = engine.run(str(SPEC), "run-1")
     for step in ("plan", "implement"):
-        _complete(engine.board_conn, _node(run, step)["hermes_task_id"])
+        _complete(engine.kanban.board_conn, _node(run, step)["hermes_task_id"])
         run = engine.advance(str(SPEC), "run-1")
 
     # validate fails -> fix is scheduled
-    _complete(engine.board_conn, _node(run, "validate")["hermes_task_id"], outcome="crashed")
+    _complete(engine.kanban.board_conn, _node(run, "validate")["hermes_task_id"], outcome="crashed")
     run = engine.advance(str(SPEC), "run-1")
     assert _node(run, "fix")["status"] == "scheduled"
     first_validate_task = _node(run, "validate")["hermes_task_id"]
 
     # fix completes -> validate re-runs on a fresh card
-    _complete(engine.board_conn, _node(run, "fix")["hermes_task_id"])
+    _complete(engine.kanban.board_conn, _node(run, "fix")["hermes_task_id"])
     run = engine.advance(str(SPEC), "run-1")
     assert _node(run, "validate")["status"] == "scheduled"
     assert _node(run, "validate")["hermes_task_id"] != first_validate_task
+
+
+def _stub_runners(runner_dir: Path, *profiles: str) -> None:
+    runner_dir.mkdir(parents=True, exist_ok=True)
+    for profile in profiles:
+        path = runner_dir / profile
+        path.write_text('#!/usr/bin/env bash\necho "ok: $1"\n')
+        path.chmod(0o755)
+
+
+def test_global_workflow_runs_via_direct_executor(tmp_path: Path) -> None:
+    runner_dir = tmp_path / "runners"
+    _stub_runners(runner_dir, "researcher", "analyst", "writer", "publisher")
+    direct = DirectExecutor(
+        runner_dir=runner_dir, store_dir=tmp_path / "store", timeout_seconds=10
+    )
+    eng = Engine(
+        core_cli=["bun", "run", str(CLI)],
+        db_path=str(tmp_path / "runs.db"),
+        direct=direct,
+    )
+
+    run = eng.run(str(GLOBAL_SPEC), "g-1")
+    # No Kanban card: the handle is a direct run:node:iteration token, not a t_ id.
+    assert _node(run, "fetch")["hermes_task_id"] == "g-1:fetch:0"
+
+    # The profile runner settles each node synchronously, so a bare advance per
+    # step ingests it and schedules the next: fetch -> summarize -> draft.
+    for _ in range(3):
+        run = eng.advance(str(GLOBAL_SPEC), "g-1")
+    assert run["status"] == "waiting"
+    assert _node(run, "review")["status"] == "waiting_for_review"
+
+    run = eng.decide_review(str(GLOBAL_SPEC), "g-1", "review", "approved")
+    run = eng.advance(str(GLOBAL_SPEC), "g-1")
+    assert run["status"] == "completed"
+    assert _node(run, "publish")["outcome"] == "success"

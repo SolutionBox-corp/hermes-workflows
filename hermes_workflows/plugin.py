@@ -32,6 +32,16 @@ _EXPLAIN_SCHEMA = {
     "required": ["workflow_id"],
     "additionalProperties": False,
 }
+_REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "run_id": {"type": "string"},
+        "node_id": {"type": "string"},
+        "decision": {"type": "string", "enum": ["approved", "rejected", "needs_changes"]},
+    },
+    "required": ["run_id", "node_id", "decision"],
+    "additionalProperties": False,
+}
 
 
 def register(ctx: Any) -> None:
@@ -69,6 +79,13 @@ def register(ctx: Any) -> None:
         schema=_EXPLAIN_SCHEMA,
         handler=_handle_explain,
         description="Explain what a workflow does without running it.",
+    )
+    ctx.register_tool(
+        name="workflow_review",
+        toolset=TOOLSET,
+        schema=_REVIEW_SCHEMA,
+        handler=_handle_review,
+        description="Resolve a human_review node (approved/rejected/needs_changes) and advance the run.",
     )
 
 
@@ -110,11 +127,22 @@ def _handle_status(args: dict, **_kwargs: Any) -> str:
     return json.dumps(tools.workflow_status(args["run_id"], engine=_build_engine()))
 
 
+def _handle_review(args: dict, **_kwargs: Any) -> str:
+    from . import config, tools
+
+    return json.dumps(
+        tools.review_workflow(
+            args["run_id"],
+            args["node_id"],
+            args["decision"],
+            engine=_build_engine(),
+            roots=config.spec_roots(),
+            core_cli=config.core_cli(),
+        )
+    )
+
+
 def _build_engine() -> Any:
-    from hermes_cli import kanban_db as kb
+    from .cli import build_engine
 
-    from . import config
-    from .engine import Engine
-
-    board = kb.connect(board=config.runtime_board())
-    return Engine(core_cli=config.core_cli(), db_path=str(config.runs_db_path()), board_conn=board)
+    return build_engine()

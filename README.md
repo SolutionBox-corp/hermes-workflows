@@ -13,23 +13,38 @@ OpenSecondBrain is an optional long-term memory layer.
 
 ## Status
 
-MVP in development. The engine is headless-first; a minimal read-only dashboard tab lists
-workflows. The visual `@xyflow/react` editor is a later phase.
+The engine is headless-first and runs autonomously. A workflow advances on a self-terminating
+Cron tick with no human in the loop except an explicit `human_review` node. The dashboard tab
+lists workflows and runs and resolves reviews; the visual `@xyflow/react` editor is a later phase.
 
-## Node types (MVP)
+## Node types
 
 - `trigger` — `manual` or `cron`
-- `agent_task` — run a text prompt as a Hermes Kanban task assigned to a profile
+- `agent_task` — run a text prompt as work assigned to a profile
 - `condition` — branch on a structured condition (node status or review decision)
-- `human_review` — pause for a human decision
+- `human_review` — pause for a human decision (channel-agnostic resolution)
 - `finish` — terminate the run
+
+## Execution
+
+The workflow scope picks the execution backend: a **project** run schedules durable Kanban cards
+on the project's own board; a **global** run invokes the profile runner directly with no card.
+Worker spawning is the Hermes gateway's job; the tick only advances the graph and self-terminates
+when no runs remain active. See [docs/execution.md](docs/execution.md).
+
+```bash
+hermes-workflows run <workflow_id>          # start a run and advance it once
+hermes-workflows advance-all                # the tick body: advance every active run
+hermes-workflows status <run_id>
+hermes-workflows review <run_id> <node_id> <approved|rejected|needs_changes>
+```
 
 ## Layout
 
 - `packages/core` — TypeScript engine (schema, validation, compiler, runtime, memory) on Bun
-- `hermes_workflows/` — thin Python bridge to Hermes (kanban, cron, profiles, o2b)
-- `dashboard/` — Hermes dashboard plugin (read-only in MVP)
-- `docs/specs`, `docs/plans` — design and implementation plan
+- `hermes_workflows/` — Python orchestrator: execution backends + Hermes bridges (kanban, cron, profiles, boards, notify, o2b)
+- `dashboard/` — Hermes dashboard plugin (read + review)
+- `docs/` — [architecture](docs/architecture.md), [execution](docs/execution.md), [workflow schema](docs/workflow-schema.md); specs and plans under `docs/specs`, `docs/plans`
 
 ## Development
 

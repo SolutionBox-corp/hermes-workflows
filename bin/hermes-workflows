@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Entrypoint for the Hermes Workflows orchestrator. Installed as a symlink at
+# ~/.hermes/bin/hermes-workflows; cron trigger/tick jobs invoke it. Resolves the
+# repo (this script's parent) and the Hermes install so both packages import.
+set -euo pipefail
+
+self="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+repo="$(cd "$(dirname "$self")/.." && pwd)"
+hermes_install="${HERMES_AGENT_HOME:-/usr/local/lib/hermes-agent}"
+
+export PYTHONPATH="${repo}:${hermes_install}${PYTHONPATH:+:${PYTHONPATH}}"
+exec python3 -m hermes_workflows.cli "$@"
