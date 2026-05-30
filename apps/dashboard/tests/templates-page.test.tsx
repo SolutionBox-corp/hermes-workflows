@@ -123,6 +123,19 @@ describe("TemplatesPage — row lifecycle actions", () => {
     await waitFor(() => expect(listWorkflows).toHaveBeenCalledTimes(2));
   });
 
+  it("does not duplicate when the prompted id is not a valid slug", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("bad id!");
+    const createWorkflow = vi.fn(async (): Promise<SpecDetail> => ({ workflow: {} as never, path: "" }));
+    const client = stubClient({ listWorkflows: vi.fn(async () => items), createWorkflow });
+    render(<TemplatesPage client={client} onOpen={() => {}} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getAllByRole("button", { name: /duplicate/i })[0]!);
+
+    expect(createWorkflow).not.toHaveBeenCalled();
+    expect(await screen.findByText(/not a valid id/i)).toBeInTheDocument();
+  });
+
   it("does not duplicate when the prompt is cancelled", async () => {
     vi.spyOn(window, "prompt").mockReturnValue(null);
     const createWorkflow = vi.fn(async (): Promise<SpecDetail> => ({ workflow: {} as never, path: "" }));

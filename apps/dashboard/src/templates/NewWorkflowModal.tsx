@@ -3,6 +3,7 @@ import { getApiClient } from "../host";
 import type { WorkflowsApi } from "../api/client";
 import type { Scope, ScopeType, Trigger } from "../api/types";
 import { buildSeedWorkflow } from "./seed";
+import { isValidSlug } from "./slug";
 
 export interface NewWorkflowModalProps {
   /** Called with the new workflow id once it is created on disk. */
@@ -12,10 +13,6 @@ export interface NewWorkflowModalProps {
   /** Injected for tests; defaults to the host-bound client. */
   client?: WorkflowsApi;
 }
-
-// Mirror the core id charset (it becomes the on-disk filename). The core remains
-// the authority and re-validates; this only spares an obviously-bad round-trip.
-const SLUG = /^[A-Za-z0-9_-]+$/;
 
 function parseProjects(raw: string): string[] {
   return raw
@@ -49,7 +46,7 @@ export function NewWorkflowModal({
     // marks the `FormEvent` alias deprecated ("doesn't actually exist").
     (event: { preventDefault: () => void }) => {
       event.preventDefault();
-      if (!SLUG.test(id)) {
+      if (!isValidSlug(id)) {
         setError("Id must be a slug: letters, digits, hyphen, or underscore only.");
         return;
       }

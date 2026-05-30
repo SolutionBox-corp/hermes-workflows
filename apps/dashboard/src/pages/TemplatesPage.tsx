@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getApiClient } from "../host";
 import { downloadTextFile } from "../templates/download";
 import { NewWorkflowModal } from "../templates/NewWorkflowModal";
+import { isValidSlug } from "../templates/slug";
 import type { WorkflowsApi } from "../api/client";
 import type { Trigger, WorkflowListItem } from "../api/types";
 
@@ -84,6 +85,10 @@ export function TemplatesPage({
     (id: string) => {
       const newId = window.prompt(`New id for the copy of "${id}"`, `${id}-copy`);
       if (!newId) return;
+      if (!isValidSlug(newId)) {
+        setRunMessage(`"${newId}" is not a valid id: letters, digits, hyphen, or underscore only.`);
+        return;
+      }
       setRunMessage(`Duplicating ${id}…`);
       api
         .getWorkflow(id)

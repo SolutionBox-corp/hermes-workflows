@@ -143,13 +143,17 @@ def test_delete_missing_is_404(client: TestClient) -> None:
     assert client.delete("/workflows/ghost").status_code == 404
 
 
-def test_export_returns_the_yaml_in_a_json_envelope(client: TestClient) -> None:
+def test_export_returns_the_yaml_in_a_json_envelope(client: TestClient, tmp_path: Path) -> None:
     resp = client.get("/workflows/feature-development/export")
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == "feature-development"
     assert body["filename"] == "feature-development.workflow.yaml"
-    assert "id: feature-development" in body["yaml"]
+    # The route must stream the on-disk file verbatim — no second serializer.
+    on_disk = (
+        tmp_path / "home" / "workflows" / "global" / "feature-development.workflow.yaml"
+    ).read_text(encoding="utf-8")
+    assert body["yaml"] == on_disk
 
 
 def test_export_missing_is_404(client: TestClient) -> None:
