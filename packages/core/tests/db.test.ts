@@ -42,11 +42,7 @@ describe("openRunsDatabase", () => {
     const tables = db
       .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
       .all() as { name: string }[];
-    expect(tables.map((t) => t.name)).toEqual([
-      "workflow_node_runs",
-      "workflow_runs",
-      "workflow_schedules",
-    ]);
+    expect(tables.map((t) => t.name)).toEqual(["workflow_node_runs", "workflow_runs"]);
   });
 });
 
@@ -102,21 +98,73 @@ describe("RunRepository — runs", () => {
   });
 });
 
-describe("RunRepository — schedules", () => {
-  test("creates, reads, toggles, and deletes a schedule", () => {
-    repo.saveSchedule({
-      id: "sch-1",
-      workflow_id: "wf",
-      cron_expression: "0 9 * * *",
-      hermes_cron_id: "cron_abc",
-      enabled: true,
-    });
-    expect(repo.getSchedule("sch-1")?.hermes_cron_id).toBe("cron_abc");
+describe("RunRepository — run summaries", () => {
+  test("lists summaries with meta and the derived current node", () => {
+    const running = createRunState(workflow, "sum-running", "projX");
+    running.status = "running";
+    running.nodes["a"] = { node_id: "a", status: "running", seq: 1 };
+    repo.saveRun(running, { started_at: 1000 });
 
-    repo.setScheduleEnabled("sch-1", false);
-    expect(repo.getSchedule("sch-1")?.enabled).toBe(false);
+    const finished = createRunState(workflow, "sum-finished");
+    finished.status = "completed";
+    finished.nodes["a"] = { node_id: "a", status: "completed", outcome: "success", seq: 1 };
+    finished.nodes["done"] = { node_id: "done", status: "completed", seq: 2 };
+    repo.saveRun(finished, { started_at: 2000, finished_at: 2500 });
 
-    repo.deleteSchedule("sch-1");
-    expect(repo.getSchedule("sch-1")).toBeNull();
+    const all = repo.listRunSummaries(false);
+    const s1 = all.find((s) => s.run_id === "sum-running");
+    expect(s1?.workflow_id).toBe("wf");
+    expect(s1?.workflow_version).toBe(2);
+    expect(s1?.project_id).toBe("projX");
+    expect(s1?.status).toBe("running");
+    expect(s1?.current_node).toBe("a"); // the active node
+    expect(s1?.started_at).toBe(1000);
+    expect(s1?.finished_at).toBeUndefined();
+
+    const s2 = all.find((s) => s.run_id === "sum-finished");
+    expect(s2?.current_node).toBe("done"); // highest-seq settled node
+    expect(s2?.finished_at).toBe(2500);
+
+    const active = repo.listRunSummaries(true).map((s) => s.run_id);
+    expect(active).toContain("sum-running");
+    expect(active).not.toContain("sum-finished");
+  });
+
+  test("preserves started_at across meta-less saves and tracks finished_at", () => {
+    const run = createRunState(workflow, "sum-timing");
+    run.status = "running";
+    repo.saveRun(run, { started_at: 5000 });
+
+    // A later tick save without meta must not wipe started_at, and leaves the
+    // still-running run with no finished_at.
+    repo.saveRun(run);
+    let s = repo.listRunSummaries(false).find((r) => r.run_id === "sum-timing");
+    expect(s?.started_at).toBe(5000);
+    expect(s?.finished_at).toBeUndefined();
+
+    // Terminal save stamps finished_at; started_at is still preserved.
+    run.status = "completed";
+    repo.saveRun(run, { finished_at: 5200 });
+    s = repo.listRunSummaries(false).find((r) => r.run_id === "sum-timing");
+    expect(s?.started_at).toBe(5000);
+    expect(s?.finished_at).toBe(5200);
+
+    // Back in flight (retry) clears finished_at without losing started_at.
+    run.status = "created";
+    repo.saveRun(run);
+    s = repo.listRunSummaries(false).find((r) => r.run_id === "sum-timing");
+    expect(s?.started_at).toBe(5000);
+    expect(s?.finished_at).toBeUndefined();
+  });
+
+  test("breaks current-node ties on node_id deterministically", () => {
+    const run = createRunState(workflow, "sum-tie");
+    run.status = "running";
+    // two active nodes, same (default) seq -> lower node_id wins, stably.
+    run.nodes["a"] = { node_id: "a", status: "running" };
+    run.nodes["done"] = { node_id: "done", status: "scheduled" };
+    repo.saveRun(run);
+    const s = repo.listRunSummaries(false).find((r) => r.run_id === "sum-tie");
+    expect(s?.current_node).toBe("a");
   });
 });

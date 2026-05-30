@@ -58,6 +58,79 @@ def test_get_unknown_run_is_404(client: TestClient) -> None:
     assert client.get("/runs/ghost").status_code == 404
 
 
+def _find_run(rows: list[dict], run_id: str) -> dict:
+    match = [r for r in rows if r["run_id"] == run_id]
+    assert match, f"{run_id} not in {[r['run_id'] for r in rows]}"
+    return match[0]
+
+
+def test_list_runs_default_active_has_page_fields(client: TestClient) -> None:
+    run_id = _start_run(client)
+    resp = client.get("/runs")
+    assert resp.status_code == 200
+    row = _find_run(resp.json()["runs"], run_id)
+    # Every TZ column is present (values may be null for a fresh run).
+    for key in (
+        "run_id",
+        "workflow_id",
+        "project_id",
+        "status",
+        "current_node",
+        "started_at",
+        "finished_at",
+        "duration",
+    ):
+        assert key in row, key
+    assert row["workflow_id"] == "feature-development"
+
+
+def test_list_runs_scope_all_includes_finished(client: TestClient) -> None:
+    run_id = _start_run(client)
+    client.post(f"/runs/{run_id}/cancel")  # settle it -> no longer active
+    active_ids = [r["run_id"] for r in client.get("/runs").json()["runs"]]
+    assert run_id not in active_ids
+    all_ids = [r["run_id"] for r in client.get("/runs?scope=all").json()["runs"]]
+    assert run_id in all_ids
+
+
+def test_run_timing_is_recorded_end_to_end(client: TestClient) -> None:
+    run_id = _start_run(client)
+    # started_at is stamped at run-create; a still-running run has no finish/duration.
+    row = _find_run(client.get("/runs?scope=all").json()["runs"], run_id)
+    assert row["started_at"] is not None
+    assert row["finished_at"] is None
+    assert row["duration"] is None
+
+    # Cancelling settles the run: finished_at is stamped and duration is derived.
+    client.post(f"/runs/{run_id}/cancel")
+    row = _find_run(client.get("/runs?scope=all").json()["runs"], run_id)
+    assert row["finished_at"] is not None
+    assert row["duration"] == row["finished_at"] - row["started_at"]
+    assert row["duration"] >= 0
+
+    # Retrying puts it back in flight: finished_at clears, started_at survives.
+    client.post(f"/runs/{run_id}/retry")
+    row = _find_run(client.get("/runs?scope=all").json()["runs"], run_id)
+    assert row["started_at"] is not None
+    assert row["finished_at"] is None
+
+
+def test_export_run_returns_bundle(client: TestClient) -> None:
+    run_id = _start_run(client)
+    resp = client.get(f"/runs/{run_id}/export")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["run_id"] == run_id
+    assert body["filename"] == f"{run_id}.run.json"
+    # The downloadable payload is the full run-load bundle (per-node detail).
+    assert body["json"]["run_id"] == run_id
+    assert "nodes" in body["json"]
+
+
+def test_export_unknown_run_is_404(client: TestClient) -> None:
+    assert client.get("/runs/ghost/export").status_code == 404
+
+
 def test_cancel_run(client: TestClient) -> None:
     run_id = _start_run(client)
     resp = client.post(f"/runs/{run_id}/cancel")

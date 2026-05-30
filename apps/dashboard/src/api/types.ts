@@ -56,11 +56,40 @@ export interface WorkflowListItem {
   trigger: Trigger;
 }
 
-/** One row of `GET /runs` (active runs only). */
+/** One row of `GET /runs` — the Runs-page columns. `scope=active` (default)
+ *  lists in-flight runs; `scope=all` adds finished ones. `started_at`/`finished_at`
+ *  are epoch seconds (null until set); `duration` is `finished_at - started_at`
+ *  in seconds when both are known. */
 export interface RunSummary {
   run_id: string;
   workflow_id: string;
+  project_id: string | null;
   status: RunStatus;
+  current_node: string | null;
+  started_at: number | null;
+  finished_at: number | null;
+  duration: number | null;
+}
+
+/** Returned by `GET /runs/{id}/export` — the full run-load bundle wrapped in a
+ *  JSON envelope so it travels over the host's JSON-only `fetchJSON`. */
+export interface ExportedRun {
+  run_id: string;
+  filename: string;
+  json: RunState;
+}
+
+/** One row of `GET /schedules` — a workflow's native Hermes cron schedule.
+ *  Hermes cron interprets schedules in UTC. `last_run`/`next_run` are ISO
+ *  timestamps (null until known). */
+export interface ScheduleListItem {
+  workflow_id: string;
+  cron_expression: string | null;
+  timezone: string;
+  enabled: boolean;
+  last_run: string | null;
+  next_run: string | null;
+  hermes_cron_id: string;
 }
 
 /** Returned by `POST /workflows/{id}/run`. */
@@ -99,4 +128,37 @@ export interface RunOptions {
 
 export interface O2BStatus {
   connected: boolean;
+}
+
+/** A single settings value (the Settings page handles string / int / bool). */
+export type SettingsValue = string | number | boolean;
+
+/** Effective settings: a flat map of field key → value. */
+export type WorkflowSettings = Record<string, SettingsValue>;
+
+/** One field descriptor in the settings schema. `enforced` is false for knobs
+ *  persisted/displayed but not yet honoured by the engine. */
+export interface SettingsField {
+  key: string;
+  type: "string" | "int" | "bool" | "enum";
+  enforced: boolean;
+  default: SettingsValue;
+  options?: string[];
+}
+
+export interface SettingsGroup {
+  key: string;
+  label: string;
+  fields: SettingsField[];
+}
+
+export interface SettingsSchema {
+  namespace: string;
+  groups: SettingsGroup[];
+}
+
+/** Body of `GET`/`PUT /settings` responses — effective values plus the schema. */
+export interface SettingsResponse {
+  values: WorkflowSettings;
+  schema: SettingsSchema;
 }

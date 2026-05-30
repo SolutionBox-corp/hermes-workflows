@@ -6,6 +6,7 @@
 import type {
   CreateWorkflowBody,
   DeleteResult,
+  ExportedRun,
   ExportedWorkflow,
   HermesPlan,
   O2BStatus,
@@ -13,6 +14,9 @@ import type {
   RunStartResult,
   RunState,
   RunSummary,
+  ScheduleListItem,
+  SettingsResponse,
+  WorkflowSettings,
   SaveWorkflowBody,
   SpecDetail,
   ValidationResult,
@@ -20,6 +24,9 @@ import type {
 } from "./types";
 
 export type FetchJSON = <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
+
+/** Which runs the Runs page asks for: in-flight only (default) or every run. */
+export type RunScope = "active" | "all";
 
 export interface WorkflowsApi {
   listWorkflows(): Promise<WorkflowListItem[]>;
@@ -31,10 +38,19 @@ export interface WorkflowsApi {
   validateWorkflow(id: string): Promise<ValidationResult>;
   compilePreview(id: string): Promise<HermesPlan>;
   runWorkflow(id: string, options?: RunOptions): Promise<RunStartResult>;
-  listRuns(): Promise<RunSummary[]>;
+  listRuns(scope?: RunScope): Promise<RunSummary[]>;
+  exportRunLogs(id: string): Promise<ExportedRun>;
   getRun(id: string): Promise<RunState>;
   cancelRun(id: string): Promise<RunState>;
   retryRun(id: string, node?: string): Promise<RunState>;
+  listSchedules(): Promise<ScheduleListItem[]>;
+  pauseSchedule(id: string): Promise<unknown>;
+  resumeSchedule(id: string): Promise<unknown>;
+  runScheduleNow(id: string): Promise<unknown>;
+  editSchedule(id: string, cron: string): Promise<unknown>;
+  deleteSchedule(id: string): Promise<DeleteResult>;
+  getSettings(): Promise<SettingsResponse>;
+  saveSettings(values: WorkflowSettings): Promise<SettingsResponse>;
   o2bStatus(): Promise<O2BStatus>;
 }
 
@@ -43,6 +59,7 @@ const BASE = "/api/plugins/workflows";
 export function createApiClient(fetchJSON: FetchJSON): WorkflowsApi {
   const workflow = (id: string): string => `${BASE}/workflows/${encodeURIComponent(id)}`;
   const run = (id: string): string => `${BASE}/runs/${encodeURIComponent(id)}`;
+  const schedule = (id: string): string => `${BASE}/schedules/${encodeURIComponent(id)}`;
 
   const postJson = <T>(path: string, body: unknown): Promise<T> =>
     fetchJSON<T>(path, {
@@ -93,9 +110,14 @@ export function createApiClient(fetchJSON: FetchJSON): WorkflowsApi {
       return postJson<RunStartResult>(`${workflow(id)}/run`, options ?? {});
     },
 
-    async listRuns() {
-      const { runs } = await fetchJSON<{ runs?: RunSummary[] }>(`${BASE}/runs`);
+    async listRuns(scope) {
+      const query = scope === "all" ? "?scope=all" : "";
+      const { runs } = await fetchJSON<{ runs?: RunSummary[] }>(`${BASE}/runs${query}`);
       return runs ?? [];
+    },
+
+    exportRunLogs(id) {
+      return fetchJSON<ExportedRun>(`${run(id)}/export`);
     },
 
     getRun(id) {
@@ -108,6 +130,47 @@ export function createApiClient(fetchJSON: FetchJSON): WorkflowsApi {
 
     retryRun(id, node) {
       return postJson<RunState>(`${run(id)}/retry`, node === undefined ? {} : { node_id: node });
+    },
+
+    async listSchedules() {
+      const { schedules } = await fetchJSON<{ schedules?: ScheduleListItem[] }>(`${BASE}/schedules`);
+      return schedules ?? [];
+    },
+
+    pauseSchedule(id) {
+      return postJson<unknown>(`${schedule(id)}/pause`, {});
+    },
+
+    resumeSchedule(id) {
+      return postJson<unknown>(`${schedule(id)}/resume`, {});
+    },
+
+    runScheduleNow(id) {
+      return postJson<unknown>(`${schedule(id)}/run`, {});
+    },
+
+    editSchedule(id, cron) {
+      return fetchJSON<unknown>(schedule(id), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cron }),
+      });
+    },
+
+    deleteSchedule(id) {
+      return fetchJSON<DeleteResult>(schedule(id), { method: "DELETE" });
+    },
+
+    getSettings() {
+      return fetchJSON<SettingsResponse>(`${BASE}/settings`);
+    },
+
+    saveSettings(values) {
+      return fetchJSON<SettingsResponse>(`${BASE}/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(values),
+      });
     },
 
     o2bStatus() {

@@ -122,7 +122,7 @@ describe("workflows API client", () => {
     expect(JSON.parse(String(h.last().init?.body))).toEqual({});
   });
 
-  it("lists runs and unwraps the envelope", async () => {
+  it("lists runs and unwraps the envelope (active by default)", async () => {
     const h = harness();
     const run = { run_id: "r1", workflow_id: "wf-1", status: "running" };
     h.reply({ runs: [run] });
@@ -131,6 +131,25 @@ describe("workflows API client", () => {
 
     expect(result).toEqual([run]);
     expect(h.last().path).toBe(`${BASE}/runs`);
+  });
+
+  it("lists all runs with the scope query when asked", async () => {
+    const h = harness();
+    h.reply({ runs: [] });
+    await h.client.listRuns("all");
+    expect(h.last().path).toBe(`${BASE}/runs?scope=all`);
+  });
+
+  it("exports a run's log bundle, returning the JSON envelope", async () => {
+    const h = harness();
+    const envelope = { run_id: "r1", filename: "r1.run.json", json: { run_id: "r1", nodes: {} } };
+    h.reply(envelope);
+
+    const result = await h.client.exportRunLogs("r1");
+
+    expect(result).toBe(envelope);
+    expect(h.last().path).toBe(`${BASE}/runs/r1/export`);
+    expect(h.last().init?.method ?? "GET").toBe("GET");
   });
 
   it("gets a run by id", async () => {
@@ -166,6 +185,85 @@ describe("workflows API client", () => {
     h.reply({ run_id: "r1", status: "running", nodes: {} });
     await h.client.retryRun("r1", "node-a");
     expect(JSON.parse(String(h.last().init?.body))).toEqual({ node_id: "node-a" });
+  });
+
+  it("lists schedules and unwraps the envelope", async () => {
+    const h = harness();
+    const sched = { workflow_id: "blog", cron_expression: "0 9 * * *", hermes_cron_id: "c1" };
+    h.reply({ schedules: [sched] });
+
+    const result = await h.client.listSchedules();
+
+    expect(result).toEqual([sched]);
+    expect(h.last().path).toBe(`${BASE}/schedules`);
+  });
+
+  it("pauses, resumes, and runs a schedule via POST", async () => {
+    const h = harness();
+    h.reply({ ok: true });
+
+    await h.client.pauseSchedule("c1");
+    expect(h.last().path).toBe(`${BASE}/schedules/c1/pause`);
+    expect(h.last().init?.method).toBe("POST");
+
+    await h.client.resumeSchedule("c1");
+    expect(h.last().path).toBe(`${BASE}/schedules/c1/resume`);
+
+    await h.client.runScheduleNow("c1");
+    expect(h.last().path).toBe(`${BASE}/schedules/c1/run`);
+    expect(h.last().init?.method).toBe("POST");
+  });
+
+  it("edits a schedule's cron via PUT, forwarding the expression", async () => {
+    const h = harness();
+    h.reply({ ok: true, cron_expression: "30 7 * * *" });
+
+    await h.client.editSchedule("c1", "30 7 * * *");
+
+    const call = h.last();
+    expect(call.path).toBe(`${BASE}/schedules/c1`);
+    expect(call.init?.method).toBe("PUT");
+    expect(new Headers(call.init?.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(call.init?.body))).toEqual({ cron: "30 7 * * *" });
+  });
+
+  it("deletes a schedule via DELETE", async () => {
+    const h = harness();
+    h.reply({ deleted: true });
+
+    const result = await h.client.deleteSchedule("c1");
+
+    expect(result).toEqual({ deleted: true });
+    expect(h.last().path).toBe(`${BASE}/schedules/c1`);
+    expect(h.last().init?.method).toBe("DELETE");
+  });
+
+  it("gets settings, returning values and schema", async () => {
+    const h = harness();
+    const payload = {
+      values: { default_mode: "durable", fail_open: true },
+      schema: { namespace: "plugins.workflows", groups: [] },
+    };
+    h.reply(payload);
+
+    const result = await h.client.getSettings();
+
+    expect(result).toBe(payload);
+    expect(h.last().path).toBe(`${BASE}/settings`);
+    expect(h.last().init?.method ?? "GET").toBe("GET");
+  });
+
+  it("saves settings via PUT, forwarding the values map", async () => {
+    const h = harness();
+    h.reply({ values: { internal_board: "b2" }, schema: { namespace: "plugins.workflows", groups: [] } });
+
+    await h.client.saveSettings({ internal_board: "b2", fail_open: false });
+
+    const call = h.last();
+    expect(call.path).toBe(`${BASE}/settings`);
+    expect(call.init?.method).toBe("PUT");
+    expect(new Headers(call.init?.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(call.init?.body))).toEqual({ internal_board: "b2", fail_open: false });
   });
 
   it("reads the O2B status badge", async () => {
