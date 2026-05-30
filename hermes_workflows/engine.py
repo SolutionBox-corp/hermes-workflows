@@ -14,6 +14,7 @@ the spec is interpreted in exactly one place (TypeScript).
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
@@ -135,7 +136,16 @@ class Engine:
             spec_path = path_by_id.get(run["workflow_id"])
             if spec_path is None:
                 continue
-            advanced.append(self.advance(spec_path, run["run_id"]))
+            try:
+                advanced.append(self.advance(spec_path, run["run_id"]))
+            except Exception as exc:  # noqa: BLE001 - one bad run must not wedge the tick
+                # Unattended: a single failing run (misconfigured backend, missing
+                # runner, transient error) is isolated so every other active run
+                # still advances. Surfaced on stderr, which lands in the tick log.
+                print(
+                    f"hermes-workflows: advance failed for run {run['run_id']}: {exc}",
+                    file=sys.stderr,
+                )
         return advanced
 
     def advance(self, spec_path: str, run_id: str) -> dict:

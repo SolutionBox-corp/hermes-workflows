@@ -17,6 +17,7 @@ from hermes_workflows.executor import KanbanExecutor
 ROOT = Path(__file__).resolve().parents[2]
 CLI = ["bun", "run", str(ROOT / "packages" / "core" / "src" / "cli.ts")]
 SPEC = ROOT / "examples" / "feature-development.workflow.yaml"
+GLOBAL_SPEC = ROOT / "examples" / "blog-daily-signals.workflow.yaml"
 ROOTS = [str(ROOT / "examples")]
 
 
@@ -51,6 +52,21 @@ def test_advance_all_advances_every_active_run(engine: Engine) -> None:
     # run-a's plan was completed, so it moved on; run-b is untouched at plan.
     assert engine.status("run-a")["nodes"]["implement"]["status"] == "scheduled"
     assert engine.status("run-b")["nodes"]["plan"]["status"] == "scheduled"
+
+
+def test_advance_all_survives_one_run_raising(engine: Engine) -> None:
+    # `engine` has a Kanban backend but no Direct backend, so advancing a global
+    # run raises. That must not wedge the tick for every other active run.
+    engine.run(str(SPEC), "run-ok")
+    engine._core(
+        ["run-create", str(GLOBAL_SPEC), "--db", engine.db_path, "--id", "run-bad"]
+    )
+
+    advanced = engine.advance_all(ROOTS)
+
+    ids = {r["run_id"] for r in advanced}
+    assert "run-ok" in ids  # the healthy run still advanced
+    assert "run-bad" not in ids  # the raising run was skipped, not fatal
 
 
 def test_advance_all_skips_terminal_runs(engine: Engine) -> None:
