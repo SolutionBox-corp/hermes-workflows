@@ -22,6 +22,7 @@ from . import cli_bridge
 from .executor import NodeExecutor, select_executor
 
 _ACTIVE_STATUSES = frozenset({"created", "running", "waiting"})
+REVIEW_OPTIONS = frozenset({"approved", "rejected", "needs_changes"})
 
 
 class Engine:
@@ -70,8 +71,16 @@ class Engine:
         return run
 
     def decide_review(self, spec_path: str, run_id: str, node_id: str, decision: str) -> dict:
+        if decision not in REVIEW_OPTIONS:
+            raise ValueError(
+                f"invalid review decision '{decision}'; expected one of {sorted(REVIEW_OPTIONS)}"
+            )
         run = self.status(run_id)
-        node = run["nodes"][node_id]
+        node = run["nodes"].get(node_id)
+        if node is None:
+            raise ValueError(f"unknown node '{node_id}' in run '{run_id}'")
+        if node.get("status") != "waiting_for_review":
+            raise ValueError(f"node '{node_id}' is not awaiting review")
         node["review_decision"] = decision
         node["seq"] = _max_seq(run) + 1
         self._save(run)
