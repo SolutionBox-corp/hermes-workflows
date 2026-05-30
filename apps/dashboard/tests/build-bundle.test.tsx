@@ -30,6 +30,14 @@ describe("T0 bundling spike — built plugin bundle", () => {
     expect(bundleSource).not.toMatch(/\bimport\s*\(/);
   });
 
+  it("contains no `process` reference (would ReferenceError in the browser)", () => {
+    // The host loads this file directly; `process` is undefined there. react /
+    // react-dom's NODE_ENV checks must be inlined at build time. jsdom defines
+    // `process`, so this text guard — not the eval below — is what catches it.
+    expect(bundleSource).not.toMatch(/process\.env/);
+    expect(bundleSource).not.toMatch(/[^.\w]process[^.\w]/);
+  });
+
   it("emits the xyflow stylesheet alongside the script", () => {
     expect(existsSync(resolve(distDir, "index.css"))).toBe(true);
   });

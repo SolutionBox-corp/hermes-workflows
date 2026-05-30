@@ -45,6 +45,15 @@ export class SpecValidationError extends Error {
   }
 }
 
+/** Raised when a create is refused because the id already exists. Its name lets
+ * the Python bridge map it to a 409 (distinct from a 400 validation failure). */
+export class SpecExistsError extends Error {
+  override name = "SpecExistsError";
+  constructor(readonly id: string) {
+    super(`workflow '${id}' already exists`);
+  }
+}
+
 /** Pick the destination root for a workflow from its scope. Pure. */
 export function chooseWriteRoot(scope: Scope, roots: WriteRoots): string {
   if (scope.type === "project" && roots.project) return roots.project;
@@ -111,7 +120,7 @@ export class SpecStore {
   /** Like {@link saveWorkflow} but refuses to overwrite an existing id. */
   async createWorkflow(workflow: Workflow, ui: UiLayout | undefined, destRoot: string): Promise<string> {
     if ((await this.pathsFor(workflow.id)).length > 0) {
-      throw new Error(`workflow '${workflow.id}' already exists`);
+      throw new SpecExistsError(workflow.id);
     }
     return this.saveWorkflow(workflow, ui, destRoot);
   }

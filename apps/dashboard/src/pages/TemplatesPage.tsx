@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { getApiClient } from "../host";
+import { downloadTextFile } from "../templates/download";
+import { NewWorkflowModal } from "../templates/NewWorkflowModal";
+import { isValidSlug } from "../templates/slug";
 import type { WorkflowsApi } from "../api/client";
 import type { Trigger, WorkflowListItem } from "../api/types";
 
@@ -10,6 +13,9 @@ export interface TemplatesPageProps {
   onOpen: (workflowId: string) => void;
   /** Open the run inspector after starting a run (wired by the app shell). */
   onOpenRun?: (runId: string) => void;
+  /** Notified with the new id after a create. When wired, the shell navigates
+   *  to the editor; otherwise the page just refreshes its own list. */
+  onCreated?: (workflowId: string) => void;
 }
 
 function describeTrigger(trigger: Trigger): string {
@@ -21,10 +27,28 @@ type LoadState =
   | { kind: "error" }
   | { kind: "ready"; items: WorkflowListItem[] };
 
-export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps): React.ReactElement {
+export function TemplatesPage({
+  client,
+  onOpen,
+  onOpenRun,
+  onCreated,
+}: TemplatesPageProps): React.ReactElement {
   const api = client ?? getApiClient();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [runMessage, setRunMessage] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [showNew, setShowNew] = useState(false);
+
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  const handleCreated = useCallback(
+    (id: string) => {
+      setShowNew(false);
+      if (onCreated) onCreated(id);
+      else reload();
+    },
+    [onCreated, reload],
+  );
 
   useEffect(() => {
     let active = true;
@@ -39,7 +63,9 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
     return () => {
       active = false;
     };
-  }, [api]);
+    // reloadKey re-fetches after a duplicate/delete without resetting to the
+    // loading state, so existing rows stay visible during the refresh.
+  }, [api, reloadKey]);
 
   const handleRun = useCallback(
     (id: string) => {
@@ -55,6 +81,63 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
     [api, onOpenRun],
   );
 
+  const handleDuplicate = useCallback(
+    (id: string) => {
+      const newId = window.prompt(`New id for the copy of "${id}"`, `${id}-copy`);
+      if (!newId) return;
+      if (!isValidSlug(newId)) {
+        setRunMessage(`"${newId}" is not a valid id: letters, digits, hyphen, or underscore only.`);
+        return;
+      }
+      setRunMessage(`Duplicating ${id}…`);
+      api
+        .getWorkflow(id)
+        .then((detail) =>
+          api.createWorkflow({
+            workflow: { ...detail.workflow, id: newId, name: `${detail.workflow.name} copy` },
+            ...(detail.ui !== undefined ? { ui: detail.ui } : {}),
+          }),
+        )
+        .then(() => {
+          setRunMessage(`Created ${newId}`);
+          reload();
+        })
+        .catch((err: unknown) =>
+          setRunMessage(err instanceof Error ? err.message : `Failed to duplicate ${id}`),
+        );
+    },
+    [api, reload],
+  );
+
+  const handleDelete = useCallback(
+    (id: string) => {
+      if (!window.confirm(`Delete workflow "${id}"? This cannot be undone.`)) return;
+      setRunMessage(`Deleting ${id}…`);
+      api
+        .deleteWorkflow(id)
+        .then(() => {
+          setRunMessage(`Deleted ${id}`);
+          reload();
+        })
+        .catch((err: unknown) =>
+          setRunMessage(err instanceof Error ? err.message : `Failed to delete ${id}`),
+        );
+    },
+    [api, reload],
+  );
+
+  const handleExport = useCallback(
+    (id: string) => {
+      api
+        .exportWorkflow(id)
+        .then(({ filename, yaml }) => downloadTextFile(filename, yaml))
+        .catch((err: unknown) =>
+          setRunMessage(err instanceof Error ? err.message : `Failed to export ${id}`),
+        );
+    },
+    [api],
+  );
+
   if (state.kind === "loading") {
     return <p style={{ padding: 16 }}>Loading workflows…</p>;
   }
@@ -64,8 +147,24 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
 
   return (
     <div style={{ padding: 16 }}>
-      <h2>Workflows</h2>
-      {runMessage !== null && <p role="status">{runMessage}</p>}
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <h2 style={{ marginRight: "auto" }}>Workflows</h2>
+        <button type="button" className="hw-btn hw-btn--primary" onClick={() => setShowNew(true)}>
+          New workflow
+        </button>
+      </div>
+      {runMessage !== null && (
+        <p role="status" className="hw-status">
+          {runMessage}
+        </p>
+      )}
+      {showNew && (
+        <NewWorkflowModal
+          client={api}
+          onCreated={handleCreated}
+          onCancel={() => setShowNew(false)}
+        />
+      )}
       {state.items.length === 0 ? (
         <p>No workflows yet.</p>
       ) : (
@@ -87,12 +186,35 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
                 <td style={cell}>{item.scope}</td>
                 <td style={cell}>{describeTrigger(item.trigger)}</td>
                 <td style={cell}>
-                  <button type="button" onClick={() => onOpen(item.id)}>
-                    Open
-                  </button>{" "}
-                  <button type="button" onClick={() => handleRun(item.id)}>
-                    Run
-                  </button>
+                  <span className="hw-actions">
+                    <button type="button" className="hw-btn hw-btn--sm" onClick={() => onOpen(item.id)}>
+                      Open
+                    </button>
+                    <button type="button" className="hw-btn hw-btn--sm" onClick={() => handleRun(item.id)}>
+                      Run
+                    </button>
+                    <button
+                      type="button"
+                      className="hw-btn hw-btn--sm"
+                      onClick={() => handleDuplicate(item.id)}
+                    >
+                      Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      className="hw-btn hw-btn--sm"
+                      onClick={() => handleExport(item.id)}
+                    >
+                      Export
+                    </button>
+                    <button
+                      type="button"
+                      className="hw-btn hw-btn--sm hw-btn--danger"
+                      onClick={() => handleDelete(item.id)}
+                    >
+                      Delete
+                    </button>
+                  </span>
                 </td>
               </tr>
             ))}

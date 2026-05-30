@@ -4,6 +4,9 @@
 // without a network. The host's `fetchJSON` spreads `init` into `fetch` and does
 // not serialize bodies, so writes set Content-Type and stringify here.
 import type {
+  CreateWorkflowBody,
+  DeleteResult,
+  ExportedWorkflow,
   HermesPlan,
   O2BStatus,
   RunOptions,
@@ -21,6 +24,9 @@ export type FetchJSON = <T = unknown>(path: string, init?: RequestInit) => Promi
 export interface WorkflowsApi {
   listWorkflows(): Promise<WorkflowListItem[]>;
   getWorkflow(id: string): Promise<SpecDetail>;
+  createWorkflow(body: CreateWorkflowBody): Promise<SpecDetail>;
+  deleteWorkflow(id: string): Promise<DeleteResult>;
+  exportWorkflow(id: string): Promise<ExportedWorkflow>;
   saveWorkflow(id: string, body: SaveWorkflowBody): Promise<SpecDetail>;
   validateWorkflow(id: string): Promise<ValidationResult>;
   compilePreview(id: string): Promise<HermesPlan>;
@@ -53,6 +59,18 @@ export function createApiClient(fetchJSON: FetchJSON): WorkflowsApi {
 
     getWorkflow(id) {
       return fetchJSON<SpecDetail>(workflow(id));
+    },
+
+    createWorkflow(body) {
+      return postJson<SpecDetail>(`${BASE}/workflows`, body);
+    },
+
+    deleteWorkflow(id) {
+      return fetchJSON<DeleteResult>(workflow(id), { method: "DELETE" });
+    },
+
+    exportWorkflow(id) {
+      return fetchJSON<ExportedWorkflow>(`${workflow(id)}/export`);
     },
 
     saveWorkflow(id, body) {

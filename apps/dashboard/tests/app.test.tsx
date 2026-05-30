@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../src/App";
 import type { WorkflowsApi } from "../src/api/client";
@@ -59,6 +59,23 @@ describe("App shell", () => {
     // back on templates: the per-row Open button reappears, editor chrome is gone
     expect(await screen.findByRole("button", { name: /open/i })).toBeInTheDocument();
     expect(screen.queryByText(/Editing deploy/i)).not.toBeInTheDocument();
+  });
+
+  it("creates a new workflow and lands in the editor for the generated id", async () => {
+    const createWorkflow = vi.fn(async () => ({ workflow: { id: "x" } as never, path: "" }));
+    const getWorkflow = vi.fn(async (_id: string) => detail);
+    const client = stubClient({ createWorkflow, getWorkflow });
+    render(<App client={client} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getByRole("button", { name: /new workflow/i }));
+    await userEvent.type(screen.getByLabelText(/^name/i), "Brand New");
+    await userEvent.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => expect(getWorkflow).toHaveBeenCalled());
+    const generatedId = getWorkflow.mock.calls[0]![0] as string;
+    expect(generatedId).toMatch(/^[a-z]{6}$/);
+    expect(await screen.findByText(new RegExp(`Editing ${generatedId}`, "i"))).toBeInTheDocument();
   });
 
   it("starts a run from templates and opens the run inspector", async () => {

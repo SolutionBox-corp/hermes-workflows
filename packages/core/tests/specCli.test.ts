@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { cmdSpecGet, cmdSpecSave, cmdSpecCreate, cmdSpecDelete } from "../src/cli/commands.ts";
-import { SpecValidationError } from "../src/index.ts";
+import { SpecValidationError, SpecExistsError } from "../src/index.ts";
 
 const SPEC = {
   id: "editor-made",
@@ -58,7 +58,7 @@ describe("cli commands — spec write", () => {
 
   test("spec-create refuses a duplicate id", async () => {
     await cmdSpecCreate(roots, SPEC, writeRoots);
-    await expect(cmdSpecCreate(roots, SPEC, writeRoots)).rejects.toThrow();
+    await expect(cmdSpecCreate(roots, SPEC, writeRoots)).rejects.toBeInstanceOf(SpecExistsError);
   });
 
   test("spec-delete removes the spec", async () => {
