@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 kb = pytest.importorskip("hermes_cli.kanban_db")
+cj = pytest.importorskip("cron.jobs")
 
 from hermes_workflows import cli
 
@@ -26,6 +27,13 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     shutil.copy(SPEC, h / "workflows" / "global" / "feature-development.workflow.yaml")
     monkeypatch.setenv("HERMES_HOME", str(h))
     monkeypatch.setenv("HERMES_KANBAN_DB", str(tmp_path / "kanban.db"))
+    # Redirect cron writes so the tick (advance-all -> sync_workflow_tick) never
+    # touches the real ~/.hermes/cron.
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir()
+    monkeypatch.setattr(cj, "CRON_DIR", cron_dir)
+    monkeypatch.setattr(cj, "JOBS_FILE", cron_dir / "jobs.json")
+    monkeypatch.setattr(cj, "OUTPUT_DIR", cron_dir / "output")
     return h
 
 
@@ -44,8 +52,9 @@ def test_run_status_and_advance_all(home: Path, capsys) -> None:
     assert status["run_id"] == run_id
     assert status["workflow_id"] == "feature-development"
 
-    advanced = _invoke(capsys, "advance-all")
-    assert any(r["run_id"] == run_id for r in advanced)
+    tick = _invoke(capsys, "advance-all")
+    assert any(r["run_id"] == run_id for r in tick["advanced"])
+    assert tick["active"] is True
 
 
 def test_unknown_workflow_exits(home: Path) -> None:

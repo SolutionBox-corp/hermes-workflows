@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from . import cli_bridge
-from .executor import NodeExecutor, select_executor
+from .executor import NodeExecutor
 
 _ACTIVE_STATUSES = frozenset({"created", "running", "waiting"})
 REVIEW_OPTIONS = frozenset({"approved", "rejected", "needs_changes"})
@@ -33,11 +33,15 @@ class Engine:
         db_path: str,
         kanban: Optional[NodeExecutor] = None,
         direct: Optional[NodeExecutor] = None,
+        kanban_factory: Optional[Callable[[str], NodeExecutor]] = None,
     ) -> None:
         self.core_cli = list(core_cli)
         self.db_path = db_path
+        # `kanban` is the fallback board executor for project runs with no bound
+        # project; `kanban_factory(slug)` binds a project run to its own board.
         self.kanban = kanban
         self.direct = direct
+        self.kanban_factory = kanban_factory
 
     # --- core CLI helpers -------------------------------------------------
 
@@ -90,25 +94,30 @@ class Engine:
         self,
         spec_roots: Sequence[str],
         *,
-        dispatch: Callable[[str], Any],
         sync_tick: Callable[..., Any],
         tick_script: str,
-        resolve_board: Callable[[dict], Optional[str]],
+        dispatch: Optional[Callable[[str], Any]] = None,
+        resolve_board: Optional[Callable[[dict], Optional[str]]] = None,
     ) -> dict:
-        """One self-terminating tick: advance every active run, run a dispatcher
-        pass on each project board that has open cards, then keep the singleton
-        tick cron alive iff runs remain active. There is no persistent dispatcher
-        daemon, so advancing and dispatching are driven together each tick."""
+        """One self-terminating tick: advance every active run, then keep the
+        singleton tick cron alive iff runs remain active.
+
+        Worker spawning is normally the gateway's embedded dispatcher's job — it
+        ticks every board on disk — so the tick only drives the workflow graph
+        forward. For deployments that disable the gateway dispatcher
+        (``kanban.dispatch_in_gateway=false``), pass ``dispatch`` + ``resolve_board``
+        to run an explicit per-board dispatcher pass for boards with open cards."""
         advanced = self.advance_all(spec_roots)
         active = [run for run in advanced if run.get("status") in _ACTIVE_STATUSES]
 
         boards: list[str] = []
-        for run in active:
-            board = resolve_board(run)
-            if board and board not in boards and _has_open_card(run):
-                boards.append(board)
-        for board in boards:
-            dispatch(board)
+        if dispatch is not None and resolve_board is not None:
+            for run in active:
+                board = resolve_board(run)
+                if board and board not in boards and _has_open_card(run):
+                    boards.append(board)
+            for board in boards:
+                dispatch(board)
 
         sync_tick(active=bool(active), script=tick_script)
         return {"advanced": advanced, "dispatched": boards, "active": bool(active)}
@@ -133,7 +142,7 @@ class Engine:
         run = self.status(run_id)
         plan = self._core(["compile-preview", spec_path])
         task_params = {task["node"]: task for task in plan["kanban_tasks"]}
-        executor = self._select(plan["scope"]["type"])
+        executor = self._executor_for(plan["scope"], run)
 
         seq = _max_seq(run)
         for node in run["nodes"].values():
@@ -158,8 +167,18 @@ class Engine:
         self._save(run)
         return run
 
-    def _select(self, scope_type: str) -> NodeExecutor:
-        executor = select_executor(scope_type, kanban=self.kanban, direct=self.direct)
+    def _executor_for(self, scope: dict, run: dict) -> NodeExecutor:
+        scope_type = scope.get("type", "")
+        if scope_type == "global":
+            return self._require(self.direct, scope_type)
+        if scope_type in ("project", "projects"):
+            slug = run.get("project_id") or _first(scope.get("projects"))
+            if slug and self.kanban_factory is not None:
+                return self.kanban_factory(slug)
+            return self._require(self.kanban, scope_type)
+        raise ValueError(f"unknown scope type '{scope_type}'")
+
+    def _require(self, executor: Optional[NodeExecutor], scope_type: str) -> NodeExecutor:
         if executor is None:
             raise ValueError(f"no executor configured for scope '{scope_type}'")
         return executor
@@ -188,6 +207,10 @@ class Engine:
 
 def _max_seq(run: dict) -> int:
     return max((node.get("seq") or 0 for node in run["nodes"].values()), default=0)
+
+
+def _first(items: Optional[Sequence[str]]) -> Optional[str]:
+    return items[0] if items else None
 
 
 def _has_open_card(run: dict) -> bool:

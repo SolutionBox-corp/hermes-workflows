@@ -23,20 +23,30 @@ from .engine import Engine
 
 
 def build_engine() -> Engine:
-    """Wire the orchestrator to the live Hermes runtime: a Kanban backend on the
-    runtime board and a Direct backend over the profile runners."""
+    """Wire the orchestrator to the live Hermes runtime: project runs land on
+    their own project board (``kanban_factory``), falling back to the runtime
+    board when unbound; global runs use the Direct profile-runner backend."""
     from hermes_cli import kanban_db as kb
 
+    from .bridge import boards
     from .executor import DirectExecutor, KanbanExecutor
 
-    board = kb.connect(board=config.runtime_board())
+    cache: dict[str, KanbanExecutor] = {}
+
+    def kanban_factory(slug: str) -> KanbanExecutor:
+        if slug not in cache:
+            boards.ensure_board(slug)
+            cache[slug] = KanbanExecutor(kb.connect(board=slug))
+        return cache[slug]
+
     return Engine(
         core_cli=config.core_cli(),
         db_path=str(config.runs_db_path()),
-        kanban=KanbanExecutor(board),
+        kanban=KanbanExecutor(kb.connect(board=config.runtime_board())),
         direct=DirectExecutor(
             runner_dir=config.runner_dir(), store_dir=config.direct_store_dir()
         ),
+        kanban_factory=kanban_factory,
     )
 
 
@@ -53,13 +63,39 @@ def _spec_path_for_run(engine: Engine, run_id: str) -> str:
     return _spec_path_for_workflow(engine, run["workflow_id"])
 
 
+def _default_project(engine: Engine, spec_path: str, given: Optional[str]) -> Optional[str]:
+    """Bind a project run to its project: explicit --project wins, else the
+    workflow scope's first declared project; global stays unbound."""
+    if given:
+        return given
+    scope = engine._core(["compile-preview", spec_path]).get("scope", {})
+    if scope.get("type") in ("project", "projects"):
+        projects = scope.get("projects") or []
+        return projects[0] if projects else None
+    return None
+
+
+def _advance_all(engine: Engine) -> dict:
+    """The tick body the cron shim runs: advance every active run and keep the
+    singleton tick cron alive while runs remain active. Worker spawning is the
+    gateway's embedded dispatcher (it ticks every board), so no dispatch here."""
+    from .bridge import cron
+
+    return engine.tick(
+        config.spec_roots(),
+        sync_tick=lambda *, active, script: cron.sync_workflow_tick(active=active),
+        tick_script="advance-all",
+    )
+
+
 def _dispatch(args: argparse.Namespace, engine: Engine) -> Any:
     if args.command == "run":
         spec = _spec_path_for_workflow(engine, args.workflow_id)
+        project_id = _default_project(engine, spec, args.project)
         run_id = f"{args.workflow_id}-{uuid.uuid4().hex[:8]}"
-        return engine.run(spec, run_id, project_id=args.project)
+        return engine.run(spec, run_id, project_id=project_id)
     if args.command == "advance-all":
-        return engine.advance_all(config.spec_roots())
+        return _advance_all(engine)
     if args.command == "status":
         return engine.status(args.run_id)
     if args.command == "review":
