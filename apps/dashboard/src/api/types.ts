@@ -75,6 +75,23 @@ export interface SaveWorkflowBody {
   ui?: UiLayout;
 }
 
+/** Body of `POST /workflows` — same shape as a save, but the route refuses to
+ *  overwrite an existing id (409). */
+export type CreateWorkflowBody = SaveWorkflowBody;
+
+/** Returned by `DELETE /workflows/{id}`. */
+export interface DeleteResult {
+  deleted: boolean;
+}
+
+/** Returned by `GET /workflows/{id}/export` — the canonical on-disk YAML wrapped
+ *  in a JSON envelope so it travels over the host's JSON-only `fetchJSON`. */
+export interface ExportedWorkflow {
+  id: string;
+  filename: string;
+  yaml: string;
+}
+
 /** Optional start options for `POST /workflows/{id}/run`. */
 export interface RunOptions {
   project_id?: string;

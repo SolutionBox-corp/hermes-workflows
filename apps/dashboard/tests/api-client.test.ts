@@ -174,4 +174,44 @@ describe("workflows API client", () => {
     expect(await h.client.o2bStatus()).toEqual({ connected: true });
     expect(h.last().path).toBe(`${BASE}/o2b-status`);
   });
+
+  it("creates a workflow with a JSON POST to the collection route", async () => {
+    const h = harness();
+    const body = { workflow: { id: "fresh" }, ui: { xyflow: { nodes: [] } } } as never;
+    const created = { workflow: { id: "fresh" }, path: "/x/fresh.workflow.yaml" };
+    h.reply(created);
+
+    const result = await h.client.createWorkflow(body);
+
+    expect(result).toBe(created);
+    const call = h.last();
+    expect(call.path).toBe(`${BASE}/workflows`);
+    expect(call.init?.method).toBe("POST");
+    expect(new Headers(call.init?.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(call.init?.body))).toEqual(body);
+  });
+
+  it("deletes a workflow via DELETE, encoding the id", async () => {
+    const h = harness();
+    h.reply({ deleted: true });
+
+    const result = await h.client.deleteWorkflow("a/b");
+
+    expect(result).toEqual({ deleted: true });
+    const call = h.last();
+    expect(call.path).toBe(`${BASE}/workflows/a%2Fb`);
+    expect(call.init?.method).toBe("DELETE");
+  });
+
+  it("exports a workflow, returning the YAML envelope", async () => {
+    const h = harness();
+    const envelope = { id: "wf-1", filename: "wf-1.workflow.yaml", yaml: "id: wf-1\n" };
+    h.reply(envelope);
+
+    const result = await h.client.exportWorkflow("wf-1");
+
+    expect(result).toBe(envelope);
+    expect(h.last().path).toBe(`${BASE}/workflows/wf-1/export`);
+    expect(h.last().init?.method ?? "GET").toBe("GET");
+  });
 });

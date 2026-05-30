@@ -39,10 +39,26 @@ run inspector it drives.
   through `ui.xyflow`, and Save persists `{ workflow, ui }`.
 - Templates page (list, open, run) and a live run inspector that polls the run,
   colours nodes by status, and offers whole-run cancel/retry and per-node retry.
+- Dashboard workflow authoring lifecycle: create a workflow from a modal
+  (name/scope/trigger; the id is generated, not user-entered), seeded with a
+  minimal valid graph and opened straight in the editor; duplicate under a new id;
+  export the canonical YAML; and delete
+  with confirmation. Backed by `POST /workflows` (refuse-overwrite; a clashing id
+  is `409`, an invalid graph `400`), `DELETE /workflows/{id}` (`404` if absent),
+  and `GET /workflows/{id}/export` (the on-disk YAML in a JSON envelope, so no
+  second serializer ships to the browser). The core gains a distinct
+  `SpecExistsError` so the bridge can map a duplicate id to `409`.
 - Typed API client over the host `fetchJSON`, sharing spec/run/plan types from
   `@hermes-workflows/core` via type-only imports.
 - Root `dashboard:*` scripts and a `bun run validate` that builds the frontend
   and guards that the committed `dashboard/dist` matches a fresh build.
+
+### Fixed
+
+- Production dashboard bundle loads under the host: `NODE_ENV` is inlined to
+  `production` and the production JSX runtime is used, so the bundle no longer
+  throws a `process is not defined` `ReferenceError` that prevented the plugin
+  from calling `register()`.
 
 ### Security
 

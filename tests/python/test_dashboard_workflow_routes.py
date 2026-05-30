@@ -84,3 +84,77 @@ def test_compile_preview_route(client: TestClient) -> None:
     resp = client.post("/workflows/feature-development/compile-preview")
     assert resp.status_code == 200
     assert resp.json()["first_node"] == "plan"
+
+
+# --- lifecycle: create / delete / export -------------------------------------
+
+SEED = {
+    "id": "fresh",
+    "name": "Fresh",
+    "version": 1,
+    "scope": {"type": "global"},
+    "trigger": {"type": "manual"},
+    "nodes": [{"id": "finish", "type": "finish", "outcome": "success"}],
+    "edges": [],
+}
+
+
+def test_create_writes_a_new_workflow(client: TestClient) -> None:
+    resp = client.post("/workflows", json={"workflow": SEED})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["workflow"]["id"] == "fresh"
+    assert body["path"].endswith("fresh.workflow.yaml")
+    # the created spec is now loadable
+    assert client.get("/workflows/fresh").status_code == 200
+
+
+def test_create_persists_optional_ui(client: TestClient) -> None:
+    ui = {"xyflow": {"viewport": {"x": 1, "y": 2, "zoom": 1}}}
+    resp = client.post("/workflows", json={"workflow": SEED, "ui": ui})
+    assert resp.status_code == 200
+    assert client.get("/workflows/fresh").json()["ui"] == ui
+
+
+def test_create_duplicate_id_is_409(client: TestClient) -> None:
+    dup = {**SEED, "id": "feature-development", "name": "Clash"}
+    resp = client.post("/workflows", json={"workflow": dup})
+    assert resp.status_code == 409
+
+
+def test_create_invalid_graph_is_400(client: TestClient) -> None:
+    bad = {**SEED, "edges": [{"from": "finish", "to": "ghost"}]}
+    resp = client.post("/workflows", json={"workflow": bad})
+    assert resp.status_code == 400
+
+
+def test_create_requires_a_workflow_object(client: TestClient) -> None:
+    assert client.post("/workflows", json={"ui": {}}).status_code == 400
+
+
+def test_delete_removes_the_workflow(client: TestClient) -> None:
+    resp = client.delete("/workflows/feature-development")
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": True}
+    assert client.get("/workflows/feature-development").status_code == 404
+
+
+def test_delete_missing_is_404(client: TestClient) -> None:
+    assert client.delete("/workflows/ghost").status_code == 404
+
+
+def test_export_returns_the_yaml_in_a_json_envelope(client: TestClient, tmp_path: Path) -> None:
+    resp = client.get("/workflows/feature-development/export")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == "feature-development"
+    assert body["filename"] == "feature-development.workflow.yaml"
+    # The route must stream the on-disk file verbatim — no second serializer.
+    on_disk = (
+        tmp_path / "home" / "workflows" / "global" / "feature-development.workflow.yaml"
+    ).read_text(encoding="utf-8")
+    assert body["yaml"] == on_disk
+
+
+def test_export_missing_is_404(client: TestClient) -> None:
+    assert client.get("/workflows/ghost/export").status_code == 404
