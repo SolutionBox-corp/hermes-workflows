@@ -15,7 +15,9 @@ OpenSecondBrain is an optional long-term memory layer.
 
 The engine is headless-first and runs autonomously. A workflow advances on a self-terminating
 Cron tick with no human in the loop except an explicit `human_review` node. The dashboard tab
-lists workflows and runs and resolves reviews; the visual `@xyflow/react` editor is a later phase.
+lists workflows and runs and resolves reviews. The backend API the visual `@xyflow/react` editor
+needs — read, validate, compile-preview, save (with layout), create, delete, run, inspect, cancel,
+retry — is in place; the editor frontend is the next phase. See [docs/dashboard.md](docs/dashboard.md).
 
 ## Node types
 
@@ -43,7 +45,7 @@ hermes-workflows review <run_id> <node_id> <approved|rejected|needs_changes>
 
 - `packages/core` — TypeScript engine (schema, validation, compiler, runtime, memory) on Bun
 - `hermes_workflows/` — Python orchestrator: execution backends + Hermes bridges (kanban, cron, profiles, boards, notify, o2b)
-- `dashboard/` — Hermes dashboard plugin (read + review)
+- `dashboard/` — Hermes dashboard plugin (read, review, and the editor authoring + run-control API)
 - `docs/` — [architecture](docs/architecture.md), [execution](docs/execution.md), [workflow schema](docs/workflow-schema.md); specs and plans under `docs/specs`, `docs/plans`
 
 ## Development
