@@ -17,8 +17,9 @@ import type { AdvanceResult } from "../runtime/advance.ts";
 import { createRunState } from "../runtime/state.ts";
 import { openRunsDatabase } from "../runtime/db/connection.ts";
 import { RunRepository } from "../runtime/db/runRepository.ts";
-import { SpecStore } from "../runtime/specStore.ts";
-import type { SpecSummary } from "../runtime/specStore.ts";
+import { SpecStore, chooseWriteRoot } from "../runtime/specStore.ts";
+import type { SpecSummary, SpecDetail, WriteRoots } from "../runtime/specStore.ts";
+import { fromObject } from "../schema/load.ts";
 
 export interface Explanation {
   id: string;
@@ -90,4 +91,41 @@ export function cmdRunSave(dbPath: string, run: RunState): void {
 export function cmdRunList(dbPath: string, activeOnly: boolean): RunState[] {
   const repo = repository(dbPath);
   return activeOnly ? repo.listActiveRuns() : repo.listAllRuns();
+}
+
+/** Load one spec (graph + ui + path) for the editor. */
+export function cmdSpecGet(roots: string[], id: string): Promise<SpecDetail | null> {
+  return new SpecStore(roots).getById(id);
+}
+
+/**
+ * Validate and persist a spec the editor edited. `spec` is a full workflow
+ * object (workflow fields plus an optional `ui` block), parsed and validated
+ * here; an invalid graph rejects and writes nothing.
+ */
+export async function cmdSpecSave(
+  roots: string[],
+  spec: unknown,
+  writeRoots: WriteRoots,
+): Promise<SpecDetail> {
+  const { workflow, ui } = fromObject(spec);
+  const store = new SpecStore(roots);
+  const path = await store.saveWorkflow(workflow, ui, chooseWriteRoot(workflow.scope, writeRoots));
+  return ui === undefined ? { workflow, path } : { workflow, ui, path };
+}
+
+/** Like {@link cmdSpecSave} but refuses to overwrite an existing id. */
+export async function cmdSpecCreate(
+  roots: string[],
+  spec: unknown,
+  writeRoots: WriteRoots,
+): Promise<SpecDetail> {
+  const { workflow, ui } = fromObject(spec);
+  const store = new SpecStore(roots);
+  const path = await store.createWorkflow(workflow, ui, chooseWriteRoot(workflow.scope, writeRoots));
+  return ui === undefined ? { workflow, path } : { workflow, ui, path };
+}
+
+export async function cmdSpecDelete(roots: string[], id: string): Promise<{ deleted: boolean }> {
+  return { deleted: await new SpecStore(roots).deleteSpec(id) };
 }
