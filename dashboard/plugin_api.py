@@ -20,6 +20,80 @@ async def list_workflows() -> dict:
     return tools.list_workflows(roots=config.spec_roots(), core_cli=config.core_cli())
 
 
+@router.post("/workflows")
+async def create_workflow(payload: dict = Body(...)) -> dict:
+    """Create a brand-new workflow on disk. Body is ``{workflow, ui?}``. Refuses
+    to overwrite an existing id (``409``); an invalid graph or bad id is ``400``.
+    The created ``{workflow, ui?, path}`` is returned so the client can open it
+    in the editor via the existing load-by-id path."""
+    import json
+    import os
+    import tempfile
+
+    from hermes_workflows import cli_bridge, config
+
+    workflow = payload.get("workflow")
+    if not isinstance(workflow, dict):
+        raise HTTPException(status_code=400, detail="body must contain a 'workflow' object")
+
+    spec = dict(workflow)
+    if payload.get("ui") is not None:
+        spec["ui"] = payload["ui"]
+
+    fd, tmp = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(spec, handle)
+        return cli_bridge.invoke(
+            [
+                *config.core_cli(),
+                "spec-create",
+                "--roots",
+                ",".join(config.spec_roots()),
+                "--global-root",
+                str(config.global_workflows_dir()),
+                "--templates-root",
+                str(config.templates_dir()),
+                "--spec-file",
+                tmp,
+            ]
+        )
+    except cli_bridge.CoreBridgeError as exc:
+        if exc.kind == "SpecExistsError":
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
+        if exc.kind in ("SpecValidationError", "WorkflowParseError"):
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        raise HTTPException(status_code=500, detail="failed to create workflow") from exc
+    finally:
+        os.unlink(tmp)
+
+
+@router.delete("/workflows/{workflow_id}")
+async def delete_workflow(workflow_id: str) -> dict:
+    """Delete a workflow's on-disk spec. ``404`` if no spec matched the id."""
+    from hermes_workflows import cli_bridge, config
+
+    result = cli_bridge.invoke(
+        [*config.core_cli(), "spec-delete", "--roots", ",".join(config.spec_roots()), "--id", workflow_id]
+    )
+    if not result or not result.get("deleted"):
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return result
+
+
+@router.get("/workflows/{workflow_id}/export")
+async def export_workflow(workflow_id: str) -> dict:
+    """Return a workflow's canonical on-disk YAML for download, wrapped in a JSON
+    envelope (``{id, filename, yaml}``) so it travels over the host's JSON-only
+    ``fetchJSON`` channel. The stored file is the authority (written by
+    ``serializeWorkflow``); the route reads it verbatim and adds no second
+    serializer. ``404`` if absent."""
+    path = _spec_path_or_404(workflow_id)
+    with open(path, encoding="utf-8") as handle:
+        body = handle.read()
+    return {"id": workflow_id, "filename": f"{workflow_id}.workflow.yaml", "yaml": body}
+
+
 @router.get("/runs")
 async def list_runs() -> dict:
     from hermes_workflows import cli_bridge, config
