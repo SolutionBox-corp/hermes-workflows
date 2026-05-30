@@ -1,14 +1,28 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TemplatesPage } from "../src/pages/TemplatesPage";
 import type { WorkflowsApi } from "../src/api/client";
-import type { WorkflowListItem } from "../src/api/types";
+import type { CreateWorkflowBody, SpecDetail, WorkflowListItem } from "../src/api/types";
 
 function stubClient(overrides: Partial<WorkflowsApi> = {}): WorkflowsApi {
   const base = {
     listWorkflows: vi.fn(async () => [] as WorkflowListItem[]),
     runWorkflow: vi.fn(async () => ({ run_id: "wf-1-abc", status: "running" as const })),
+    getWorkflow: vi.fn(
+      async (id: string): Promise<SpecDetail> => ({
+        workflow: { id, name: "Source" } as never,
+        ui: { xyflow: { viewport: { x: 0, y: 0, zoom: 1 } } },
+        path: `/x/${id}.workflow.yaml`,
+      }),
+    ),
+    createWorkflow: vi.fn(async (): Promise<SpecDetail> => ({ workflow: {} as never, path: "" })),
+    deleteWorkflow: vi.fn(async () => ({ deleted: true })),
+    exportWorkflow: vi.fn(async (id: string) => ({
+      id,
+      filename: `${id}.workflow.yaml`,
+      yaml: `id: ${id}\n`,
+    })),
   };
   return { ...base, ...overrides } as unknown as WorkflowsApi;
 }
@@ -73,5 +87,95 @@ describe("TemplatesPage", () => {
     });
     render(<TemplatesPage client={client} onOpen={() => {}} />);
     expect(await screen.findByText(/failed to load/i)).toBeInTheDocument();
+  });
+});
+
+describe("TemplatesPage — row lifecycle actions", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("duplicates a workflow under a prompted new id and refreshes", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("deploy-copy");
+    const getWorkflow = vi.fn(
+      async (id: string): Promise<SpecDetail> => ({
+        workflow: { id, name: "Deploy" } as never,
+        ui: { xyflow: { viewport: { x: 0, y: 0, zoom: 1 } } },
+        path: `/x/${id}.workflow.yaml`,
+      }),
+    );
+    const createWorkflow = vi.fn(
+      async (_body: CreateWorkflowBody): Promise<SpecDetail> => ({ workflow: {} as never, path: "" }),
+    );
+    const listWorkflows = vi.fn(async () => items);
+    const client = stubClient({ listWorkflows, getWorkflow, createWorkflow });
+    render(<TemplatesPage client={client} onOpen={() => {}} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getAllByRole("button", { name: /duplicate/i })[0]!);
+
+    await waitFor(() => expect(createWorkflow).toHaveBeenCalledTimes(1));
+    expect(getWorkflow).toHaveBeenCalledWith("deploy");
+    const body = createWorkflow.mock.calls[0]![0] as { workflow: { id: string }; ui?: unknown };
+    expect(body.workflow.id).toBe("deploy-copy");
+    expect(body.ui).toBeDefined();
+    // list re-fetched after the copy
+    await waitFor(() => expect(listWorkflows).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not duplicate when the prompt is cancelled", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue(null);
+    const createWorkflow = vi.fn(async (): Promise<SpecDetail> => ({ workflow: {} as never, path: "" }));
+    const client = stubClient({ listWorkflows: vi.fn(async () => items), createWorkflow });
+    render(<TemplatesPage client={client} onOpen={() => {}} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getAllByRole("button", { name: /duplicate/i })[0]!);
+
+    expect(createWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("deletes a workflow after confirmation and refreshes", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const deleteWorkflow = vi.fn(async () => ({ deleted: true }));
+    const listWorkflows = vi.fn(async () => items);
+    const client = stubClient({ listWorkflows, deleteWorkflow });
+    render(<TemplatesPage client={client} onOpen={() => {}} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getAllByRole("button", { name: /delete/i })[0]!);
+
+    await waitFor(() => expect(deleteWorkflow).toHaveBeenCalledWith("deploy"));
+    await waitFor(() => expect(listWorkflows).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not delete when the confirm is dismissed", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const deleteWorkflow = vi.fn(async () => ({ deleted: true }));
+    const client = stubClient({ listWorkflows: vi.fn(async () => items), deleteWorkflow });
+    render(<TemplatesPage client={client} onOpen={() => {}} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getAllByRole("button", { name: /delete/i })[0]!);
+
+    expect(deleteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("exports a workflow as a YAML download", async () => {
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    const exportWorkflow = vi.fn(async (id: string) => ({
+      id,
+      filename: `${id}.workflow.yaml`,
+      yaml: `id: ${id}\n`,
+    }));
+    const client = stubClient({ listWorkflows: vi.fn(async () => items), exportWorkflow });
+    render(<TemplatesPage client={client} onOpen={() => {}} />);
+
+    await screen.findByText("Deploy");
+    await userEvent.click(screen.getAllByRole("button", { name: /export/i })[0]!);
+
+    await waitFor(() => expect(exportWorkflow).toHaveBeenCalledWith("deploy"));
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
   });
 });

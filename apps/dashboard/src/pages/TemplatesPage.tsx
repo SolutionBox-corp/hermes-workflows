@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getApiClient } from "../host";
+import { downloadTextFile } from "../templates/download";
 import type { WorkflowsApi } from "../api/client";
 import type { Trigger, WorkflowListItem } from "../api/types";
 
@@ -25,6 +26,9 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
   const api = client ?? getApiClient();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [runMessage, setRunMessage] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => {
     let active = true;
@@ -39,7 +43,9 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
     return () => {
       active = false;
     };
-  }, [api]);
+    // reloadKey re-fetches after a duplicate/delete without resetting to the
+    // loading state, so existing rows stay visible during the refresh.
+  }, [api, reloadKey]);
 
   const handleRun = useCallback(
     (id: string) => {
@@ -53,6 +59,59 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
         .catch(() => setRunMessage(`Failed to start ${id}`));
     },
     [api, onOpenRun],
+  );
+
+  const handleDuplicate = useCallback(
+    (id: string) => {
+      const newId = window.prompt(`New id for the copy of "${id}"`, `${id}-copy`);
+      if (!newId) return;
+      setRunMessage(`Duplicating ${id}…`);
+      api
+        .getWorkflow(id)
+        .then((detail) =>
+          api.createWorkflow({
+            workflow: { ...detail.workflow, id: newId, name: `${detail.workflow.name} copy` },
+            ...(detail.ui !== undefined ? { ui: detail.ui } : {}),
+          }),
+        )
+        .then(() => {
+          setRunMessage(`Created ${newId}`);
+          reload();
+        })
+        .catch((err: unknown) =>
+          setRunMessage(err instanceof Error ? err.message : `Failed to duplicate ${id}`),
+        );
+    },
+    [api, reload],
+  );
+
+  const handleDelete = useCallback(
+    (id: string) => {
+      if (!window.confirm(`Delete workflow "${id}"? This cannot be undone.`)) return;
+      setRunMessage(`Deleting ${id}…`);
+      api
+        .deleteWorkflow(id)
+        .then(() => {
+          setRunMessage(`Deleted ${id}`);
+          reload();
+        })
+        .catch((err: unknown) =>
+          setRunMessage(err instanceof Error ? err.message : `Failed to delete ${id}`),
+        );
+    },
+    [api, reload],
+  );
+
+  const handleExport = useCallback(
+    (id: string) => {
+      api
+        .exportWorkflow(id)
+        .then(({ filename, yaml }) => downloadTextFile(filename, yaml))
+        .catch((err: unknown) =>
+          setRunMessage(err instanceof Error ? err.message : `Failed to export ${id}`),
+        );
+    },
+    [api],
   );
 
   if (state.kind === "loading") {
@@ -92,6 +151,15 @@ export function TemplatesPage({ client, onOpen, onOpenRun }: TemplatesPageProps)
                   </button>{" "}
                   <button type="button" onClick={() => handleRun(item.id)}>
                     Run
+                  </button>{" "}
+                  <button type="button" onClick={() => handleDuplicate(item.id)}>
+                    Duplicate
+                  </button>{" "}
+                  <button type="button" onClick={() => handleExport(item.id)}>
+                    Export
+                  </button>{" "}
+                  <button type="button" onClick={() => handleDelete(item.id)}>
+                    Delete
                   </button>
                 </td>
               </tr>
