@@ -43,9 +43,17 @@ Listing and status:
 Authoring (for the editor):
 
 - `GET /workflows/{id}` — the full graph `{ workflow, ui?, path }`; `404` if absent.
+- `POST /workflows` — create a new workflow. Body is `{ workflow, ui? }`; the core
+  refuses to overwrite, so a clashing id is a `409` and an invalid graph or bad id
+  is a `400`. Returns the created `{ workflow, ui?, path }`.
 - `PUT /workflows/{id}` — save an edited graph. Body is `{ workflow, ui? }`; the
   body id must match the URL. An invalid graph or id mismatch is a `400` (the
   core validates before writing, so no invalid spec is persisted).
+- `DELETE /workflows/{id}` — delete a workflow's spec; `{ deleted: true }`, or
+  `404` if no spec matched.
+- `GET /workflows/{id}/export` — the canonical on-disk YAML in a JSON envelope
+  `{ id, filename, yaml }` (so it travels over the host's JSON-only `fetchJSON`);
+  `404` if absent. The stored file is the authority — no second serializer.
 - `POST /workflows/{id}/validate` — `{ valid, errors, warnings }` for the saved spec.
 - `POST /workflows/{id}/compile-preview` — the Hermes plan the spec compiles to.
 
@@ -84,8 +92,11 @@ registers the root component via
 
 ### Views
 
-- **Templates** — lists workflows (name, id, scope, trigger) with Open (editor)
-  and Run (starts a run, opens the inspector) actions.
+- **Templates** — lists workflows (name, id, scope, trigger) and is the authoring
+  surface. **New workflow** opens a modal (id, name, scope, trigger) that seeds a
+  minimal valid graph and drops straight into the editor. Per row: Open (editor),
+  Run (starts a run, opens the inspector), Duplicate (copy under a new id), Export
+  (download the canonical YAML), and Delete (with confirmation).
 - **Editor** — the `@xyflow/react` canvas with a node palette, a per-type node
   inspector, and bottom panels for server-side validation and compile preview.
   Layout round-trips losslessly through the spec's `ui.xyflow` block; Save sends
