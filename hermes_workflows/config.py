@@ -74,6 +74,17 @@ def script_store_dir() -> Path:
     return workflows_dir() / "scripts"
 
 
+def memory_settings() -> dict:
+    """Open Second Brain write policy from the enforced settings, for the engine:
+    mode + the write_* flags. Driven by the ``open_second_brain.*`` settings."""
+    return {
+        "mode": _setting_value("mode"),
+        "write_run_summaries": bool(_setting_value("write_run_summaries")),
+        "write_node_failures": bool(_setting_value("write_node_failures")),
+        "write_node_events": bool(_setting_value("write_node_events")),
+    }
+
+
 def default_deliver() -> str | None:
     """Fallback Hermes delivery target for run lifecycle notifications when a run
     has no captured origin. ``None`` means deliver nowhere by default."""
@@ -136,7 +147,9 @@ SETTINGS_SCHEMA: dict = {
                     "type": "enum",
                     "options": ["durable", "direct"],
                     "default": "durable",
-                    "enforced": False,
+                    # Enforced: durable runs one step per tick; direct drains
+                    # inline-eligible script steps synchronously (TZ §18.2).
+                    "enforced": True,
                 },
                 {"key": "max_parallel_runs", "type": "int", "default": 4, "enforced": False},
                 {"key": "default_timeout_seconds", "type": "int", "default": 120, "enforced": False},
@@ -171,17 +184,23 @@ SETTINGS_SCHEMA: dict = {
             "key": "open_second_brain",
             "label": "OpenSecondBrain",
             "fields": [
+                # The engine enforces the write policy on lifecycle transitions:
+                # `mode` gates all writes and picks the provider; the write_*
+                # flags gate run summaries + retrospective, per-node failures,
+                # and the granular run-start event. `fail_open` is the
+                # per-workflow provider concern (defaults.memory.fail_open),
+                # not an engine knob, so it stays not-yet-enforced here.
                 {
                     "key": "mode",
                     "type": "enum",
                     "options": ["auto", "open_second_brain", "none"],
                     "default": "auto",
-                    "enforced": False,
+                    "enforced": True,
                 },
                 {"key": "fail_open", "type": "bool", "default": True, "enforced": False},
-                {"key": "write_run_summaries", "type": "bool", "default": True, "enforced": False},
-                {"key": "write_node_failures", "type": "bool", "default": True, "enforced": False},
-                {"key": "write_node_events", "type": "bool", "default": False, "enforced": False},
+                {"key": "write_run_summaries", "type": "bool", "default": True, "enforced": True},
+                {"key": "write_node_failures", "type": "bool", "default": True, "enforced": True},
+                {"key": "write_node_events", "type": "bool", "default": False, "enforced": True},
             ],
         },
     ],

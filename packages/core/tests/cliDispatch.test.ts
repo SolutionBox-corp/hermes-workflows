@@ -35,6 +35,57 @@ describe("cli.ts dispatcher", () => {
     expect(code).not.toBe(0);
   });
 
+  test("run-create --origin persists the chat origin on the run", async () => {
+    const base = await mkdtemp(join(tmpdir(), "hw-origin-cli-"));
+    const db = join(base, "runs.db");
+    const created = await run([
+      "run-create",
+      "--db",
+      db,
+      example,
+      "--id",
+      "ro-1",
+      "--origin",
+      "telegram:42:7",
+    ]);
+    expect(created.code).toBe(0);
+    expect((created.json as { origin?: string }).origin).toBe("telegram:42:7");
+    const loaded = await run(["run-load", "--db", db, "--id", "ro-1"]);
+    expect((loaded.json as { origin?: string }).origin).toBe("telegram:42:7");
+    await rm(base, { recursive: true, force: true });
+  });
+
+  test("memory-event dispatches and exits 0 for a none-memory spec", async () => {
+    const base = await mkdtemp(join(tmpdir(), "hw-mem-cli-"));
+    const specFile = join(base, "none.workflow.json");
+    await writeFile(
+      specFile,
+      JSON.stringify({
+        id: "mem-none",
+        name: "Mem None",
+        version: 1,
+        scope: { type: "global" },
+        trigger: { type: "manual" },
+        defaults: { memory: { provider: "none" } },
+        nodes: [{ id: "done", type: "finish" }],
+        edges: [],
+      }),
+    );
+    const { code, json } = await run([
+      "memory-event",
+      specFile,
+      "--kind",
+      "run_completed",
+      "--title",
+      "t",
+      "--body",
+      "b",
+    ]);
+    expect(code).toBe(0);
+    expect((json as { ok: boolean }).ok).toBe(true);
+    await rm(base, { recursive: true, force: true });
+  });
+
   test("run-latest maps a workflow to its created run", async () => {
     const base = await mkdtemp(join(tmpdir(), "hw-latest-cli-"));
     const db = join(base, "runs.db");

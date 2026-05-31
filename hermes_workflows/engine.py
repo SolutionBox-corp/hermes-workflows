@@ -19,11 +19,19 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from . import cli_bridge
+from . import cli_bridge, notifications
 from .executor import CompositeExecutor, NodeExecutor
 
 _ACTIVE_STATUSES = frozenset({"created", "running", "waiting"})
 REVIEW_OPTIONS = frozenset({"approved", "rejected", "needs_changes"})
+
+# Terminal run statuses that warrant a single run-lifecycle notice.
+_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+
+# Backstop for the inline drain: a cyclic script-only workflow could stay
+# inline-eligible indefinitely, so cap the synchronous steps per call and let
+# the durable tick carry on past the cap.
+_MAX_INLINE_STEPS = 10_000
 
 
 class Engine:
@@ -36,6 +44,11 @@ class Engine:
         direct: Optional[NodeExecutor] = None,
         script: Optional[NodeExecutor] = None,
         kanban_factory: Optional[Callable[[str], NodeExecutor]] = None,
+        sender: Optional[notifications.Sender] = None,
+        default_deliver: Optional[str] = None,
+        notifier_profile: Optional[str] = None,
+        memory: Optional[dict] = None,
+        default_mode: str = "durable",
     ) -> None:
         self.core_cli = list(core_cli)
         self.db_path = db_path
@@ -47,6 +60,19 @@ class Engine:
         # the scope executor is wrapped in a CompositeExecutor that routes by kind.
         self.script = script
         self.kanban_factory = kanban_factory
+        # Run-lifecycle notifications: `sender` delivers to the run's origin or
+        # `default_deliver`; None disables delivery (headless). Subscriptions of
+        # Kanban cards to their terminal events use the native notifier.
+        self.sender = sender
+        self.default_deliver = default_deliver
+        self.notifier_profile = notifier_profile
+        # Open Second Brain write policy (the enforced open_second_brain.* knobs):
+        # {mode, write_run_summaries, write_node_failures, write_node_events}.
+        # None or mode 'none' disables all memory writes.
+        self.memory = memory or {}
+        # Enforced execution.default_mode: 'durable' (one step per tick) or
+        # 'direct' / 'auto' (drain inline-eligible script steps synchronously).
+        self.default_mode = default_mode
 
     # --- core CLI helpers -------------------------------------------------
 
@@ -66,10 +92,18 @@ class Engine:
 
     # --- public API -------------------------------------------------------
 
-    def run(self, spec_path: str, run_id: str, project_id: Optional[str] = None) -> dict:
+    def run(
+        self,
+        spec_path: str,
+        run_id: str,
+        project_id: Optional[str] = None,
+        origin: Optional[str] = None,
+    ) -> dict:
         args = ["run-create", spec_path, "--db", self.db_path, "--id", run_id]
         if project_id:
             args += ["--project", project_id]
+        if origin:
+            args += ["--origin", origin]
         self._core(args)
         return self.advance(spec_path, run_id)
 
@@ -153,6 +187,32 @@ class Engine:
         return advanced
 
     def advance(self, spec_path: str, run_id: str) -> dict:
+        """Advance a run one step, then - when inline mode is enabled and the
+        step it just scheduled is inline-eligible (script-only, settled
+        synchronously) - keep advancing in this same call until the run is
+        terminal, waiting, or schedules a durable node. ``default_mode=durable``
+        runs exactly one step per call (the unchanged durable behaviour)."""
+        for _ in range(_MAX_INLINE_STEPS):
+            run, decision = self._advance_step(spec_path, run_id)
+            if not (self._inline_permitted() and decision.get("inline_eligible")):
+                return run
+        # Backstop: a pathological cyclic script-only workflow could stay
+        # inline-eligible forever. Bail out of the synchronous drain and let the
+        # tick continue it durably rather than hang the caller.
+        print(
+            f"hermes-workflows: inline drain hit the {_MAX_INLINE_STEPS}-step cap "
+            f"for run {run_id}; continuing durably",
+            file=sys.stderr,
+        )
+        return run
+
+    def _inline_permitted(self) -> bool:
+        """Whether the global mode allows the inline drain. ``durable`` never
+        does; ``direct`` / ``auto`` do (eligibility is decided per-step by the
+        core advance)."""
+        return self.default_mode in ("direct", "auto")
+
+    def _advance_step(self, spec_path: str, run_id: str) -> tuple[dict, dict]:
         run = self.status(run_id)
         plan = self._core(["compile-preview", spec_path])
         task_params = {task["node"]: task for task in plan["kanban_tasks"]}
@@ -182,8 +242,149 @@ class Engine:
             self._schedule_node(executor, run, run_id, node_id, task_params.get(node_id))
 
         run["status"] = decision["run_status"]
+        self._emit_lifecycle(run, decision)
+        self._emit_memory(run, spec_path)
         self._save(run)
-        return run
+        return run, decision
+
+    # --- lifecycle effects (notifications) --------------------------------
+
+    def _emit_lifecycle(self, run: dict, decision: dict) -> None:
+        """Fire run-lifecycle notices once per transition into completed /
+        failed / waiting, tracked by persisted markers so a run that stays in a
+        state across ticks is never re-announced. Fail-open."""
+        notified = list(run.get("notified") or [])
+        seen = set(notified)
+
+        def mark(key: str) -> None:
+            if key not in seen:
+                seen.add(key)
+                notified.append(key)
+
+        status = run.get("status")
+        if status in _TERMINAL_STATUSES and status not in seen:
+            if self._notify(run, status):
+                mark(status)
+        for node_id in decision.get("waiting", []):
+            key = f"waiting:{node_id}"
+            if key not in seen and self._notify(run, "waiting", node_id=node_id):
+                mark(key)
+
+        if notified != (run.get("notified") or []):
+            run["notified"] = notified
+
+    def _notify(self, run: dict, event: str, node_id: Optional[str] = None) -> bool:
+        """Deliver one notice; return whether it should be recorded as done. A
+        headless no-op (no live target) returns False so the notice is retried on
+        a later in-process advance rather than falsely marked. No configured
+        sender, or no target at all, returns True (nothing to deliver, ever -
+        don't keep retrying)."""
+        if self.sender is None:
+            return True
+        try:
+            note = notifications.notify_run(
+                run_id=run["run_id"],
+                event=event,
+                send=self.sender,
+                origin=run.get("origin"),
+                default=self.default_deliver,
+                text=_notice_text(run, event, node_id),
+            )
+        except Exception as exc:  # noqa: BLE001 - a notice must never fail a run
+            print(
+                f"hermes-workflows: notify failed for run {run.get('run_id')}: {exc}",
+                file=sys.stderr,
+            )
+            return False  # delivery errored - retry, don't mark
+        if note is None:
+            return True  # no origin and no default target: nowhere to deliver, ever
+        return note.delivered is not False  # False == headless no-op -> retry
+
+    # --- lifecycle effects (memory writes) --------------------------------
+
+    def _emit_memory(self, run: dict, spec_path: str) -> None:
+        """Write Open Second Brain memory on lifecycle transitions, gated by the
+        enforced open_second_brain.* settings and idempotent per (run, event)
+        via the persisted markers. Fail-open (a memory error never fails a run).
+        """
+        mode = self.memory.get("mode")
+        if mode in (None, "none"):
+            return
+        notified = list(run.get("notified") or [])
+        seen = set(notified)
+
+        def mark(key: str) -> None:
+            if key not in seen:
+                seen.add(key)
+                notified.append(key)
+
+        status = run.get("status")
+        wf = run.get("workflow_id")
+        run_id = run.get("run_id")
+
+        # Granular per-run start event (quiet by default).
+        if self.memory.get("write_node_events") and "mem:run_started" not in seen:
+            self._memory_event(spec_path, "run_started", f"{wf} run {run_id} started", "")
+            mark("mem:run_started")
+
+        # One node_failed per newly failed node.
+        if self.memory.get("write_node_failures", True):
+            for node_id, node in run["nodes"].items():
+                if node.get("outcome") != "failure":
+                    continue
+                key = f"mem:node_failed:{node_id}"
+                if key not in seen:
+                    body = node.get("error") or node.get("output") or ""
+                    self._memory_event(spec_path, "node_failed", f"{wf} node {node_id} failed", body)
+                    mark(key)
+
+        # Run summary + retrospective on a terminal run.
+        if self.memory.get("write_run_summaries", True):
+            if status == "completed" and "mem:run_completed" not in seen:
+                self._memory_event(spec_path, "run_completed", f"{wf} run {run_id} completed", "")
+                mark("mem:run_completed")
+            if status in _TERMINAL_STATUSES and "mem:retro" not in seen:
+                self._memory_retro(spec_path, run)
+                mark("mem:retro")
+
+        if notified != (run.get("notified") or []):
+            run["notified"] = notified
+
+    def _memory_event(self, spec_path: str, kind: str, title: str, body: str) -> None:
+        try:
+            self._core(["memory-event", spec_path, "--kind", kind, "--title", title, "--body", body])
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            print(f"hermes-workflows: memory-event failed: {exc}", file=sys.stderr)
+
+    def _memory_retro(self, spec_path: str, run: dict) -> None:
+        try:
+            with _temp_json(run) as run_file:
+                self._core(["memory-retro", spec_path, "--run-file", run_file])
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            print(f"hermes-workflows: memory-retro failed: {exc}", file=sys.stderr)
+
+    def _subscribe_card(self, executor: NodeExecutor, run: dict, handle: str, params: Optional[dict]) -> None:
+        """Subscribe the run's origin to a Kanban card's terminal events via the
+        native notifier, so durable project runs close the loop out-of-process
+        (where direct delivery cannot reach). No-op for local script handles and
+        when there is no origin or board connection. Fail-open."""
+        origin = run.get("origin")
+        if not origin or (params and params.get("kind") == "script"):
+            return
+        if isinstance(handle, str) and handle.startswith("script:"):
+            return
+        conn = _board_conn(executor)
+        if conn is None:
+            return
+        try:
+            notifications.subscribe_task(
+                conn, task_id=handle, origin=origin, notifier_profile=self.notifier_profile
+            )
+        except Exception as exc:  # noqa: BLE001 - subscription failure never fails a run
+            print(
+                f"hermes-workflows: subscribe failed for {handle}: {exc}",
+                file=sys.stderr,
+            )
 
     def _executor_for(self, scope: dict, run: dict) -> NodeExecutor:
         base = self._scope_executor(scope, run)
@@ -230,6 +431,22 @@ class Engine:
         )
         node["hermes_task_id"] = handle
         node["status"] = "scheduled"
+        self._subscribe_card(executor, run, handle, params)
+
+
+def _board_conn(executor: NodeExecutor):
+    """The Kanban DB connection behind an executor, when it has one. Reaches
+    through a CompositeExecutor to its scope executor."""
+    scope = getattr(executor, "scope", executor)
+    return getattr(scope, "board_conn", None)
+
+
+def _notice_text(run: dict, event: str, node_id: Optional[str]) -> str:
+    workflow_id = run.get("workflow_id")
+    run_id = run.get("run_id")
+    if event == "waiting":
+        return f"Workflow {workflow_id} run {run_id}: review needed ({node_id})."
+    return f"Workflow {workflow_id} run {run_id}: {event}."
 
 
 def _max_seq(run: dict) -> int:

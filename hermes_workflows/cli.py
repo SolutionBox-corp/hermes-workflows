@@ -30,6 +30,7 @@ def build_engine() -> Engine:
 
     from .bridge import boards
     from .executor import DirectExecutor, KanbanExecutor, ScriptExecutor
+    from .notify_sender import make_sender
 
     cache: dict[str, KanbanExecutor] = {}
 
@@ -56,6 +57,16 @@ def build_engine() -> Engine:
             enabled=config.scripts_enabled,
         ),
         kanban_factory=kanban_factory,
+        # Run-lifecycle notices: deliver through the in-process gateway's
+        # delivery router (no-op when headless), to the run origin or the
+        # configured default target.
+        sender=make_sender(),
+        default_deliver=config.default_deliver(),
+        # Open Second Brain write policy from the enforced settings.
+        memory=config.memory_settings(),
+        # Enforced execution mode: durable (one step per tick) vs direct/auto
+        # (drain inline-eligible script steps synchronously).
+        default_mode=str(config.settings()["default_mode"]),
     )
 
 
@@ -124,7 +135,7 @@ def _dispatch(args: argparse.Namespace, engine: Engine) -> Any:
             raise SystemExit(str(exc)) from exc
         project_id = _default_project(engine, spec, args.project)
         run_id = f"{args.workflow_id}-{uuid.uuid4().hex[:8]}"
-        return engine.run(spec, run_id, project_id=project_id)
+        return engine.run(spec, run_id, project_id=project_id, origin=args.origin)
     if args.command == "advance-all":
         return _advance_all(engine)
     if args.command == "status":
@@ -142,6 +153,9 @@ def _parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="start a run and advance it once")
     p_run.add_argument("workflow_id")
     p_run.add_argument("--project", default=None)
+    # Chat origin (<platform>:<chat>[:<thread>]) for run-lifecycle notices; the
+    # cron trigger shim carries the schedule's delivery target here.
+    p_run.add_argument("--origin", default=None)
 
     sub.add_parser("advance-all", help="advance every active run")
 

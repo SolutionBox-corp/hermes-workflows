@@ -12,6 +12,10 @@ import { validateWorkflow } from "../validation/validateWorkflow.ts";
 import type { ValidationResult } from "../validation/validateWorkflow.ts";
 import { compileToHermesPlan } from "../compiler/compileToHermesPlan.ts";
 import type { HermesPlan } from "../compiler/compileToHermesPlan.ts";
+import { resolveMemoryProvider } from "../memory/resolveProvider.ts";
+import type { CliRunner } from "../memory/O2BCLIProvider.ts";
+import type { WorkflowMemoryEventKind } from "../memory/MemoryProvider.ts";
+import { buildRetrospective } from "../memory/retrospective.ts";
 import { advance } from "../runtime/advance.ts";
 import type { AdvanceResult } from "../runtime/advance.ts";
 import { createRunState } from "../runtime/state.ts";
@@ -70,6 +74,56 @@ export async function cmdAdvance(specPath: string, run: RunState): Promise<Advan
   return advance(await loadWorkflow(specPath), run);
 }
 
+/**
+ * Write one workflow memory event through the provider the spec's
+ * `defaults.memory` selects. Fail-open by default, so a `none` provider or an
+ * unavailable O2B installation makes this a successful no-op. The `runner` is
+ * injectable for tests; production uses the real `o2b` CLI.
+ */
+export async function cmdMemoryEvent(
+  specPath: string,
+  kind: WorkflowMemoryEventKind,
+  title: string,
+  body: string,
+  runner?: CliRunner,
+): Promise<{ ok: true }> {
+  const workflow = await loadWorkflow(specPath);
+  const provider = resolveMemoryProvider(workflow.defaults?.memory, runner);
+  await provider.writeEvent({ kind, title, body });
+  return { ok: true };
+}
+
+/** Write the run retrospective markdown through the spec-selected provider. */
+export async function cmdMemoryRetro(
+  specPath: string,
+  markdown: string,
+  title?: string,
+  runner?: CliRunner,
+): Promise<{ ok: true }> {
+  const workflow = await loadWorkflow(specPath);
+  const provider = resolveMemoryProvider(workflow.defaults?.memory, runner);
+  await provider.writeRetrospective({ title: title ?? workflow.name, markdown });
+  return { ok: true };
+}
+
+/**
+ * Build the §22.6 retrospective from a run and write it through the
+ * spec-selected provider. The engine calls this (via the CLI) so the markdown
+ * builder stays in the core, not duplicated in the Python orchestrator.
+ */
+export async function cmdMemoryRetroFromRun(
+  specPath: string,
+  run: RunState,
+  title?: string,
+  runner?: CliRunner,
+): Promise<{ ok: true }> {
+  const workflow = await loadWorkflow(specPath);
+  const provider = resolveMemoryProvider(workflow.defaults?.memory, runner);
+  const built = buildRetrospective(workflow, run);
+  await provider.writeRetrospective({ title: title ?? built.title, markdown: built.markdown });
+  return { ok: true };
+}
+
 /** Wall-clock in epoch seconds (the unit Hermes uses for timestamps). */
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -97,9 +151,10 @@ export async function cmdRunCreate(
   specPath: string,
   runId: string,
   projectId?: string,
+  origin?: string,
 ): Promise<RunState> {
   const workflow = await loadWorkflow(specPath);
-  const run = createRunState(workflow, runId, projectId);
+  const run = createRunState(workflow, runId, projectId, origin);
   repository(dbPath).saveRun(run, timingMeta(run, true));
   return run;
 }

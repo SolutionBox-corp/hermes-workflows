@@ -106,3 +106,8 @@ export { O2BCLIProvider, defaultRunner } from "./memory/O2BCLIProvider.ts";
 export type { CliRunner } from "./memory/O2BCLIProvider.ts";
 export { redactSecrets } from "./memory/redact.ts";
 export { FailOpenMemoryProvider } from "./memory/FailOpenMemoryProvider.ts";
+export { RedactingMemoryProvider } from "./memory/RedactingMemoryProvider.ts";
+export { buildRetrospective } from "./memory/retrospective.ts";
+export type { RetrospectiveMeta } from "./memory/retrospective.ts";
+export { resolveMemoryProvider } from "./memory/resolveProvider.ts";
+export { cmdMemoryEvent, cmdMemoryRetro, cmdMemoryRetroFromRun } from "./cli/commands.ts";
