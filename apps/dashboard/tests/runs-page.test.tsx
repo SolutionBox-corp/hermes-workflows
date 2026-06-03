@@ -38,6 +38,7 @@ const runs: RunSummary[] = [
     started_at: 1_700_000_000,
     finished_at: null,
     duration: null,
+    total_tokens: null,
   },
   {
     run_id: "nightly-bbbb2222",
@@ -48,6 +49,7 @@ const runs: RunSummary[] = [
     started_at: 1_700_000_000,
     finished_at: 1_700_000_042,
     duration: 42,
+    total_tokens: 25_000,
   },
 ];
 
@@ -64,6 +66,7 @@ describe("RunsPage", () => {
     expect(screen.getByText("running")).toBeInTheDocument();
     expect(screen.getByText("build")).toBeInTheDocument(); // current node
     expect(screen.getByText("acme")).toBeInTheDocument(); // project
+    expect(screen.getByText("25,000")).toBeInTheDocument(); // token total
   });
 
   it("loads all runs by default", async () => {
@@ -142,6 +145,25 @@ describe("RunsPage", () => {
     await clickRowAction(0, /export/i);
     await waitFor(() => expect(exportRunLogs).toHaveBeenCalledWith("deploy-aaaa1111"));
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it("downloads the trace as a second file when the export carries one", async () => {
+    URL.createObjectURL = vi.fn(() => "blob:x");
+    URL.revokeObjectURL = vi.fn();
+    const exportRunLogs = vi.fn(
+      async (id: string): Promise<ExportedRun> => ({
+        run_id: id,
+        filename: `${id}.run.json`,
+        json: { run_id: id, nodes: {} } as RunState,
+        trace_filename: `${id}.trace.jsonl`,
+        trace: '{"ts":1,"kind":"run_created"}\n',
+      }),
+    );
+    render(<RunsPage client={stubClient({ listRuns: vi.fn(async () => runs), exportRunLogs })} onOpenRun={() => {}} />);
+
+    await screen.findByText("deploy-aaaa1111");
+    await clickRowAction(0, /export/i);
+    await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(2));
   });
 
   it("surfaces a load error", async () => {

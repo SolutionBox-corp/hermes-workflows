@@ -75,9 +75,31 @@ def _workflow_detail(workflow_id: str) -> dict | None:
 def _run_state(run_id: str) -> dict | None:
     from hermes_workflows import cli_bridge, config
 
-    return cli_bridge.invoke(
+    run = cli_bridge.invoke(
         [*config.core_cli(), "run-load", "--db", str(config.runs_db_path()), "--id", run_id]
     )
+    return None if run is None else _overlay_live_telemetry(run)
+
+
+def _overlay_live_telemetry(run: dict) -> dict:
+    """Attach worker telemetry sidecars to nodes the engine has not baked yet,
+    so the inspector's poll shows live counts (and pending approvals) while a
+    node is still running. Best-effort: any failure leaves the run untouched —
+    telemetry is an overlay, never a reason for a 500."""
+    try:
+        from hermes_workflows import config, telemetry
+
+        root = config.telemetry_dir()
+        for node in run.get("nodes", {}).values():
+            task_id = node.get("hermes_task_id")
+            if not task_id or node.get("telemetry") is not None:
+                continue
+            data = telemetry.load_node_telemetry(root, task_id)
+            if data is not None:
+                node["telemetry"] = data
+    except Exception:
+        pass
+    return run
 
 
 @router.get("/workflows")
@@ -249,6 +271,9 @@ def _run_row(summary: dict) -> dict:
         "started_at": started,
         "finished_at": finished,
         "duration": duration,
+        # Sum of per-node telemetry tokens (core RunSummary); null until any
+        # node has baked telemetry.
+        "total_tokens": summary.get("total_tokens"),
     }
 
 
@@ -382,7 +407,26 @@ async def export_run(run_id: str) -> dict:
     run = _run_state(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return {"run_id": run_id, "filename": f"{run_id}.run.json", "json": run}
+    envelope = {"run_id": run_id, "filename": f"{run_id}.run.json", "json": run}
+    trace = _run_trace(run_id)
+    if trace is not None:
+        # A traced run additionally carries its JSONL timeline; the Runs page
+        # saves it as a second file next to the state bundle.
+        envelope["trace"] = trace
+        envelope["trace_filename"] = f"{run_id}.trace.jsonl"
+    return envelope
+
+
+def _run_trace(run_id: str) -> str | None:
+    """The run's JSONL trace when tracing produced one. Best-effort overlay:
+    any failure means no trace in the envelope, never a failed export."""
+    try:
+        from hermes_workflows import config
+        from hermes_workflows import trace as trace_mod
+
+        return trace_mod.read_trace(config.traces_dir(), run_id)
+    except Exception:
+        return None
 
 
 @router.post("/runs/{run_id}/cancel")

@@ -12,7 +12,14 @@ import type {
   Trigger,
 } from "@hermes-workflows/core/schema/workflow.ts";
 import type { WorkflowNode, NodeType, ReviewOption } from "@hermes-workflows/core/schema/nodes.ts";
-import type { RunState, RunStatus, NodeStatus } from "@hermes-workflows/core/schema/run.ts";
+import type {
+  RunState,
+  RunStatus,
+  NodeRunState,
+  NodeStatus,
+  NodeTelemetry,
+  NodeTelemetryApproval,
+} from "@hermes-workflows/core/schema/run.ts";
 import type { UiLayout } from "@hermes-workflows/core/schema/ui.ts";
 import type {
   ValidationResult,
@@ -32,7 +39,10 @@ export type {
   UiLayout,
   RunState,
   RunStatus,
+  NodeRunState,
   NodeStatus,
+  NodeTelemetry,
+  NodeTelemetryApproval,
   ValidationResult,
   ValidationIssue,
   HermesPlan,
@@ -76,14 +86,20 @@ export interface RunSummary {
   started_at: number | null;
   finished_at: number | null;
   duration: number | null;
+  /** Sum of per-node telemetry tokens; null until any node has telemetry. */
+  total_tokens: number | null;
 }
 
 /** Returned by `GET /runs/{id}/export` — the full run-load bundle wrapped in a
- *  JSON envelope so it travels over the host's JSON-only `fetchJSON`. */
+ *  JSON envelope so it travels over the host's JSON-only `fetchJSON`. A traced
+ *  run (observability.trace_enabled) additionally carries its JSONL timeline,
+ *  downloaded as a second file. */
 export interface ExportedRun {
   run_id: string;
   filename: string;
   json: RunState;
+  trace?: string;
+  trace_filename?: string;
 }
 
 /** One row of `GET /schedules` — a workflow's native Hermes cron schedule.

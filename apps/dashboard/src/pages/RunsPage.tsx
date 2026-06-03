@@ -106,9 +106,13 @@ export function RunsPage({ client, onOpenRun }: RunsPageProps): React.ReactEleme
     (id: string) => {
       api
         .exportRunLogs(id)
-        .then(({ filename, json }) =>
-          downloadTextFile(filename, JSON.stringify(json, null, 2), "application/json"),
-        )
+        .then(({ filename, json, trace, trace_filename }) => {
+          downloadTextFile(filename, JSON.stringify(json, null, 2), "application/json");
+          // A traced run ships its JSONL timeline as a second file.
+          if (trace !== undefined && trace_filename !== undefined) {
+            downloadTextFile(trace_filename, trace, "application/jsonl");
+          }
+        })
         .catch((err: unknown) =>
           setMessage(err instanceof Error ? err.message : `Failed to export ${id}`),
         );
@@ -157,6 +161,7 @@ export function RunsPage({ client, onOpenRun }: RunsPageProps): React.ReactEleme
               <th>Started</th>
               <th>Finished</th>
               <th>Duration</th>
+              <th>Tokens</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -173,6 +178,7 @@ export function RunsPage({ client, onOpenRun }: RunsPageProps): React.ReactEleme
                 <td>{formatEpochSeconds(r.started_at)}</td>
                 <td>{formatEpochSeconds(r.finished_at)}</td>
                 <td>{formatDuration(r.duration)}</td>
+                <td>{r.total_tokens === null ? "—" : r.total_tokens.toLocaleString("en-US")}</td>
                 <td>
                   <Menu
                     size="sm"
