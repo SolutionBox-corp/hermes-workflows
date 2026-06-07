@@ -18,6 +18,15 @@ export function isTerminalRun(status: RunStatus): boolean {
   return TERMINAL_RUN_STATUSES.has(status);
 }
 
+/** Whether editor playback should hand the run over to the run inspector.
+ *  True on every terminal status, and on `waiting`: a human_review node parks
+ *  the run indefinitely and only the inspector has review controls, so staying
+ *  on the editor canvas would stall the operator on a run that cannot finish
+ *  there. */
+export function shouldHandOff(status: RunStatus): boolean {
+  return isTerminalRun(status) || status === "waiting";
+}
+
 const ACTIVE_NODE_STATUSES = new Set<NodeStatus>(["scheduled", "running"]);
 
 /** Whether the node's worker is blocked on a command approval right now.
@@ -31,12 +40,14 @@ export function isApprovalPending(state: NodeRunState | undefined): boolean {
   );
 }
 
+// Kept in sync with the `--hw-status-*` variables in ui/theme.css — running is
+// always blue and completed always green (operator-confirmed semantics).
 const STATUS_COLORS: Record<NodeStatus, string> = {
   pending: "#6b7280",
   scheduled: "#7aa7d6",
   running: "#3b82f6",
   waiting_for_review: "#d6b25e",
-  completed: "#4a8f4a",
+  completed: "#2ea44f",
   failed: "#c0392b",
   skipped: "#4b5563",
   cancelled: "#374151",
@@ -60,16 +71,36 @@ export interface RunGraph {
   edges: FlowEdge[];
 }
 
+/** Canvas type key rendered by RunNodeView. Distinct from WORKFLOW_NODE_TYPE so
+ *  one stable nodeTypes registry can hold both renderers and a canvas switches
+ *  by remapping node `type` — never by swapping the registry object, which
+ *  ReactFlow warns about. */
+export const RUN_NODE_TYPE = "workflow-run";
+
+function runNodeData(node: WorkflowNode, state: NodeRunState | undefined): RunNodeData {
+  const data: RunNodeData = { node };
+  if (state?.status !== undefined) data.status = state.status;
+  if (isApprovalPending(state)) data.approvalPending = true;
+  return data;
+}
+
+/** Tag already-mapped flow nodes (an editor canvas mid-playback) with their run
+ *  status, preserving live positions; nodes the run has not reached stay
+ *  status-less. */
+export function overlayRunStatus(
+  nodes: readonly FlowNodeBase<{ node: WorkflowNode } & Record<string, unknown>>[],
+  run: RunState,
+): RunFlowNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    type: RUN_NODE_TYPE,
+    data: runNodeData(node.data.node, run.nodes[node.id]),
+  }));
+}
+
 /** Build a read-only flow graph for a run: the workflow's nodes/edges/layout
  *  with each node tagged by its current run status (undefined if not reached). */
 export function applyRunStatus(detail: SpecDetail, run: RunState): RunGraph {
   const flow = workflowToFlow(detail.workflow, detail.ui);
-  const nodes: RunFlowNode[] = flow.nodes.map((node) => {
-    const state = run.nodes[node.id];
-    const data: RunNodeData = { node: node.data.node };
-    if (state?.status !== undefined) data.status = state.status;
-    if (isApprovalPending(state)) data.approvalPending = true;
-    return { ...node, data };
-  });
-  return { nodes, edges: flow.edges };
+  return { nodes: overlayRunStatus(flow.nodes, run), edges: flow.edges };
 }
