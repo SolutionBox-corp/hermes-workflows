@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./ui/theme.css";
-import { getApiClient } from "./host";
+import { getApiClient, getBasePath } from "./host";
 import type { WorkflowsApi } from "./api/client";
-import type { SpecDetail } from "./api/types";
+import type { O2BStatus, SpecDetail } from "./api/types";
 import { TemplatesPage } from "./pages/TemplatesPage";
 import { RunsPage } from "./pages/RunsPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
@@ -69,14 +69,15 @@ function viewToHash(view: View): string {
   }
 }
 
-// Plugin root: one plugin header (section nav + OpenSecondBrain indicator + a
+// Plugin root: one plugin header (section nav + Open Second Brain indicator + a
 // portal slot for the active view's title/actions) over the Templates list, the
 // flow editor, and the run inspector. The host renders this as an ordinary
 // component (no createRoot of our own). View state is mirrored to the URL hash.
 export function App({ client }: AppProps): React.ReactElement {
   const api = client ?? getApiClient();
+  const basePath = useMemo(() => getBasePath(), []);
   const [view, setView] = useState<View>(() => parseHash());
-  const [o2b, setO2b] = useState<boolean | null>(null);
+  const [o2b, setO2b] = useState<O2BStatus | null>(null);
   const [leftHost, setLeftHost] = useState<HTMLElement | null>(null);
   const [actionsHost, setActionsHost] = useState<HTMLElement | null>(null);
   const rootRef = useFillHeight();
@@ -102,10 +103,12 @@ export function App({ client }: AppProps): React.ReactElement {
     api
       .o2bStatus()
       .then((status) => {
-        if (active) setO2b(status.connected);
+        if (active) setO2b(status);
       })
       .catch(() => {
-        if (active) setO2b(false);
+        // A failed probe is unknown, not "not installed": asserting the latter
+        // would point the indicator at the external repo on a transient error.
+        if (active) setO2b(null);
       });
     return () => {
       active = false;
@@ -120,7 +123,9 @@ export function App({ client }: AppProps): React.ReactElement {
         nav={NAV}
         activeKey={activeNavKey(view)}
         onNavigate={(key) => go({ name: key } as View)}
-        o2bConnected={o2b}
+        o2bConnected={o2b?.connected ?? null}
+        o2bInstalled={o2b?.installed ?? null}
+        o2bBasePath={basePath}
         leftRef={setLeftHost}
         actionsRef={setActionsHost}
       />
