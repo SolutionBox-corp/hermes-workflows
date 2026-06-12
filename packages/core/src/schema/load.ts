@@ -12,9 +12,12 @@ import type {
   EdgeCondition,
   Scope,
   Trigger,
+  EventTrigger,
+  EventTriggerType,
   Defaults,
   MemoryProviderKind,
 } from "./workflow.ts";
+import { EVENT_TRIGGER_TYPES } from "./workflow.ts";
 import type {
   WorkflowNode,
   AgentTaskNode,
@@ -25,6 +28,7 @@ import type {
 } from "./nodes.ts";
 import { parseUi } from "./ui.ts";
 import type { UiLayout } from "./ui.ts";
+import type { ParamType, ParamValue, WorkflowParam } from "../templates/params.ts";
 
 export class WorkflowParseError extends Error {
   override name = "WorkflowParseError";
@@ -84,8 +88,91 @@ export function fromObject(raw: unknown): LoadResult {
     nodes: parseNodes(rest["nodes"]),
     edges: parseEdges(rest["edges"]),
   };
+  // Where the run result is delivered (DeliveryTarget syntax or "origin"). Any
+  // non-empty string is structurally valid; the gateway validates the platform.
+  if (rest["deliver"] !== undefined) workflow.deliver = str(rest["deliver"], "deliver");
+  // Typed template parameters (single source of truth for the surface emitters).
+  if (rest["params"] !== undefined) workflow.params = parseParams(rest["params"]);
   const ui = parseUi(rawUi);
   return ui === undefined ? { workflow } : { workflow, ui };
+}
+
+const PARAM_TYPES: readonly ParamType[] = ["text", "enum", "int", "bool"];
+
+function isParamType(type: string): type is ParamType {
+  return PARAM_TYPES.some((t) => t === type);
+}
+
+function parseScalar(value: unknown, where: string): ParamValue {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  fail(`${where} must be a string, number, or boolean`);
+}
+
+function parseParams(value: unknown): WorkflowParam[] {
+  if (!Array.isArray(value)) fail("params must be a list");
+  return value.map((param, i) => parseParam(param, i));
+}
+
+function parseParam(value: unknown, index: number): WorkflowParam {
+  if (!isRecord(value)) fail(`params[${index}] must be a mapping`);
+  const type = str(value["type"], `params[${index}].type`);
+  if (!isParamType(type)) fail(`params[${index}].type must be one of ${PARAM_TYPES.join(", ")}`);
+  const param: WorkflowParam = {
+    name: str(value["name"], `params[${index}].name`),
+    type,
+    label: str(value["label"], `params[${index}].label`),
+  };
+  // `options` is enum-only; reject it on other types at the schema boundary.
+  if (value["options"] !== undefined) {
+    if (type !== "enum") fail(`params[${index}].options is only valid for an enum param`);
+    if (!Array.isArray(value["options"])) fail(`params[${index}].options must be a list`);
+    param.options = value["options"].map((o, j) => str(o, `params[${index}].options[${j}]`));
+  }
+  if (value["optional"] !== undefined) {
+    if (typeof value["optional"] !== "boolean") fail(`params[${index}].optional must be a boolean`);
+    param.optional = value["optional"];
+  }
+  if (value["strict"] !== undefined) {
+    if (typeof value["strict"] !== "boolean") fail(`params[${index}].strict must be a boolean`);
+    param.strict = value["strict"];
+  }
+  if (value["help"] !== undefined) param.help = str(value["help"], `params[${index}].help`);
+  // The default must match the declared type (so a malformed template fails at
+  // load, not later in the emitters), and a strict enum's default must be one
+  // of its options.
+  if (value["default"] !== undefined) {
+    param.default = parseDefault(type, value["default"], param, index);
+  }
+  return param;
+}
+
+function parseDefault(
+  type: ParamType,
+  raw: unknown,
+  param: WorkflowParam,
+  index: number,
+): ParamValue {
+  const def = parseScalar(raw, `params[${index}].default`);
+  if (type === "int" && !(typeof def === "number" && Number.isInteger(def))) {
+    fail(`params[${index}].default must be an integer for an int param`);
+  }
+  if (type === "bool" && typeof def !== "boolean") {
+    fail(`params[${index}].default must be a boolean for a bool param`);
+  }
+  if ((type === "text" || type === "enum") && typeof def !== "string") {
+    fail(`params[${index}].default must be a string for a ${type} param`);
+  }
+  if (
+    type === "enum" &&
+    param.strict !== false &&
+    param.options !== undefined &&
+    !param.options.includes(String(def))
+  ) {
+    fail(`params[${index}].default must be one of options for a strict enum param`);
+  }
+  return def;
 }
 
 function parseEnabled(value: unknown): boolean | undefined {
@@ -123,7 +210,31 @@ function parseTrigger(value: unknown): Trigger {
       trigger.timezone = str(value["timezone"], "trigger.timezone");
     return trigger;
   }
-  fail("trigger.type must be 'manual' or 'cron'");
+  if (isEventTriggerType(type)) {
+    return parseEventTrigger(value, type);
+  }
+  fail("trigger.type must be 'manual', 'cron', 'webhook', 'github', or 'api'");
+}
+
+function isEventTriggerType(type: string): type is EventTriggerType {
+  return EVENT_TRIGGER_TYPES.some((t) => t === type);
+}
+
+function parseEventTrigger(value: Rec, type: EventTriggerType): EventTrigger {
+  if (!Array.isArray(value["events"])) fail("trigger.events must be a list");
+  const trigger: EventTrigger = {
+    type,
+    events: value["events"].map((e, i) => str(e, `trigger.events[${i}]`)),
+  };
+  if (value["event_mapping"] !== undefined) {
+    if (!isRecord(value["event_mapping"])) fail("trigger.event_mapping must be a mapping");
+    const mapping: Record<string, string> = {};
+    for (const [k, v] of Object.entries(value["event_mapping"])) {
+      mapping[k] = str(v, `trigger.event_mapping.${k}`);
+    }
+    trigger.event_mapping = mapping;
+  }
+  return trigger;
 }
 
 function parseDefaults(value: unknown): Defaults | undefined {

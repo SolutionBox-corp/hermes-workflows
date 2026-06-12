@@ -29,6 +29,9 @@ const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 // An input_mapping value references exactly one prior node's captured output.
 const INPUT_REF_PATTERN = /^\{\{nodes\.([A-Za-z0-9_-]+)\.output\}\}$/;
 
+// An event_mapping value references a path into the trigger event payload.
+const EVENT_REF_PATTERN = /^\{event\.[A-Za-z0-9_.]+\}$/;
+
 function isValidCron(expr: string): boolean {
   const parts = expr.trim().split(/\s+/);
   return parts.length === 5 && parts.every((p) => CRON_TOKEN.test(p));
@@ -78,6 +81,38 @@ export function validateWorkflow(workflow: Workflow): ValidationResult {
   // Trigger.
   if (workflow.trigger.type === "cron" && !isValidCron(workflow.trigger.schedule)) {
     err("invalid_cron", `invalid cron expression '${workflow.trigger.schedule}'`);
+  }
+  // Event triggers (webhook/github/api): at least one event, and every
+  // event_mapping value references the {event.*} namespace.
+  if (workflow.trigger.type !== "manual" && workflow.trigger.type !== "cron") {
+    const trigger = workflow.trigger;
+    if (trigger.events.length === 0) {
+      err("empty_events", `${trigger.type} trigger declares no events`);
+    }
+    for (const [key, ref] of Object.entries(trigger.event_mapping ?? {})) {
+      if (!EVENT_REF_PATTERN.test(ref)) {
+        err(
+          "invalid_event_mapping_ref",
+          `trigger.event_mapping.${key} must be of the form '{event.<path>}', got '${ref}'`,
+        );
+      }
+    }
+  }
+
+  // Delivery target: any non-empty string is valid (the gateway validates the
+  // platform); only an empty/whitespace value is a semantic error.
+  if (workflow.deliver !== undefined && workflow.deliver.trim() === "") {
+    err("empty_deliver", "deliver is set but empty");
+  }
+
+  // Template params: names are the keys surfaces fill by, so they must be unique.
+  if (workflow.params !== undefined) {
+    const seenParams = new Set<string>();
+    for (const param of workflow.params) {
+      if (seenParams.has(param.name))
+        err("duplicate_param", `duplicate param name '${param.name}'`);
+      seenParams.add(param.name);
+    }
   }
 
   // Edge endpoints and condition references.

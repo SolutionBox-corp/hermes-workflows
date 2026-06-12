@@ -4,6 +4,7 @@
  */
 
 import type { WorkflowNode } from "./nodes.ts";
+import type { WorkflowParam } from "../templates/params.ts";
 
 export type ScopeType = "global" | "project" | "projects";
 
@@ -24,7 +25,31 @@ export interface CronTrigger {
   timezone?: string;
 }
 
-export type Trigger = ManualTrigger | CronTrigger;
+/**
+ * Event-driven triggers, mirroring Hermes's three automation trigger sources:
+ * `webhook` (a generic inbound POST), `github` (a GitHub repository event), and
+ * `api` (an external API call). All carry an `events` filter and an optional
+ * `event_mapping` of `{event.<path>}` references substituted into the entry
+ * node's prompt — a namespace distinct from `{{nodes.<id>.output}}`.
+ *
+ * NOTE: the host webhook system dispatches events only to agent prompts /
+ * direct delivery; there is no native event→workflow-run wiring yet, so these
+ * triggers are declarable, validated, and shown in the compile preview, but
+ * firing is deferred to an upstream Hermes change (no local stub).
+ */
+export type EventTriggerType = "webhook" | "github" | "api";
+
+export interface EventTrigger {
+  type: EventTriggerType;
+  /** Event names that start the workflow, e.g. `["pull_request", "issues"]`. */
+  events: string[];
+  /** `{event.<path>}` references threaded into the entry node's prompt. */
+  event_mapping?: Record<string, string>;
+}
+
+export type Trigger = ManualTrigger | CronTrigger | EventTrigger;
+
+export const EVENT_TRIGGER_TYPES: readonly EventTriggerType[] = ["webhook", "github", "api"];
 
 export type MemoryProviderKind = "auto" | "open_second_brain" | "none";
 
@@ -76,6 +101,21 @@ export interface Workflow {
   scope: Scope;
   trigger: Trigger;
   defaults?: Defaults;
+  /**
+   * Typed parameters for a workflow used as a template (mirrors the host
+   * blueprint slots). The single source of truth for the per-surface emitters
+   * in `templates/params.ts`; absent for a non-template workflow.
+   */
+  params?: WorkflowParam[];
+  /**
+   * Where the run's result is delivered, in Hermes `DeliveryTarget` syntax
+   * (`telegram:-100123:42`, `discord`, `email`, `local`, …) or the literal
+   * `"origin"` (the chat the run came from, else the configured default).
+   * Absent leaves today's run-lifecycle notices unchanged. Any non-empty string
+   * is accepted; the gateway validates the platform downstream (mirroring the
+   * host blueprint `deliver` slot, which is non-strict).
+   */
+  deliver?: string;
   nodes: WorkflowNode[];
   edges: Edge[];
 }

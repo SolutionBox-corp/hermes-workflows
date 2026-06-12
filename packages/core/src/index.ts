@@ -25,6 +25,8 @@ export type {
   Scope,
   ManualTrigger,
   CronTrigger,
+  EventTrigger,
+  EventTriggerType,
   Trigger,
   MemoryProviderKind,
   MemoryDefaults,
@@ -35,7 +37,7 @@ export type {
   Edge,
   Workflow,
 } from "./schema/workflow.ts";
-export { isWorkflowEnabled } from "./schema/workflow.ts";
+export { isWorkflowEnabled, EVENT_TRIGGER_TYPES } from "./schema/workflow.ts";
 export type { RunStatus, NodeStatus, NodeOutcome, NodeRunState, RunState } from "./schema/run.ts";
 
 // Loading
@@ -46,6 +48,25 @@ export type { UiLayout, XyflowLayout, XyflowNodeLayout, Viewport } from "./schem
 
 // Serialization
 export { serializeWorkflow } from "./serialize/serializeWorkflow.ts";
+
+// Template parameters + per-surface emitters (host-mirror of blueprint_catalog)
+export {
+  paramFormSchema,
+  paramSlashCommand,
+  paramDeeplink,
+  catalogEntry,
+  agentSeed,
+  fillParams,
+  ParamFillError,
+} from "./templates/params.ts";
+export type {
+  ParamType,
+  ParamValue,
+  WorkflowParam,
+  WorkflowTemplate,
+  ParamFormField,
+  CatalogEntry,
+} from "./templates/params.ts";
 
 // Graph helpers
 export {
