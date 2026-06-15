@@ -22,6 +22,57 @@ describe("NodeInspector", () => {
     expect(screen.getByText(/select a node/i)).toBeInTheDocument();
   });
 
+  it("disables every control when readOnly (inspecting a running node)", () => {
+    const node = flowNode({ id: "build", type: "agent_task", prompt: "p", profile: "dev" });
+    render(
+      <NodeInspector
+        node={node}
+        onChange={() => {}}
+        profiles={["dev", "qa-engineer"]}
+        skills={["lint"]}
+        readOnly
+      />,
+    );
+
+    // The whole form is wrapped in a disabled fieldset, so every native input,
+    // textarea, the Base UI select trigger, and the checkboxes report disabled.
+    expect(screen.getByLabelText("Title")).toBeDisabled();
+    expect(screen.getByLabelText("Prompt")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Profile" })).toBeDisabled();
+    // The Base UI checkbox is a role=checkbox span (not a native control), so it
+    // reports disabled via aria-disabled rather than the disabled attribute.
+    expect(screen.getByRole("checkbox", { name: "lint" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("edits a wait node's PR reference and timeout", () => {
+    const onChange = vi.fn();
+    const node = flowNode({
+      id: "merge",
+      type: "wait",
+      wait_for: { github_pr_merged: "" },
+    });
+    render(<NodeInspector node={node} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("PR reference"), {
+      target: { value: "{{nodes.pr.output}}" },
+    });
+    expect(onChange).toHaveBeenCalledWith({
+      wait_for: { github_pr_merged: "{{nodes.pr.output}}" },
+    });
+
+    fireEvent.change(screen.getByLabelText("Timeout (seconds)"), { target: { value: "3600" } });
+    expect(onChange).toHaveBeenCalledWith({ timeout_seconds: 3600 });
+  });
+
+  it("leaves controls enabled by default (editing a node)", () => {
+    const node = flowNode({ id: "build", type: "agent_task", prompt: "p", profile: "dev" });
+    render(<NodeInspector node={node} onChange={() => {}} profiles={["dev"]} />);
+    expect(screen.getByLabelText("Prompt")).not.toBeDisabled();
+  });
+
   it("edits an agent_task prompt and profile", async () => {
     const onChange = vi.fn();
     const node = flowNode({ id: "build", type: "agent_task", prompt: "old", profile: "dev" });

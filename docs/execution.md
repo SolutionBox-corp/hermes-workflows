@@ -45,6 +45,30 @@ is used) run at author time in `validateWorkflow`; this runtime path only guards
 the per-run gap. Data therefore flows through the run, not a host file, keeping a
 workflow exportable.
 
+Two further per-node channels ride the same `{{nodes.<id>.…}}` grammar:
+`{{nodes.<gate>.review_note}}` (a human_review gate's operator note — see the
+human_review section) and `{{nodes.<id>.output.task_ids}}` (the board task ids an
+upstream node surfaced in its output, extracted by their id shape) for an adopt
+node's `task_ref`.
+
+## Driving existing cards (adopt)
+
+An `agent_task` with `adopt: true` drives EXISTING board card(s) instead of
+creating one — the native Kanban flow where the work *is* the card. `task_ref`
+names them: a literal id, or `{{nodes.<id>.output.task_ids}}` resolved at the
+scheduling seam to the ids an upstream node chose. The executor assigns the
+node's `profile` and promotes each card into the dispatch lane (assign before
+promote, since assigning a `ready` card drops it to `todo`; a `triage` card takes
+the native `triage -> todo` step first), then polls every driven card; the node
+settles only when ALL are terminal (failure if any failed). Adopting a card that
+is already running / in review or terminal is a no-op (idempotent). A resolution
+or adopt error settles the node `failure` loudly, never a half-adopt.
+
+With `review_profile`, a driven card that reaches `done` is routed once through
+Hermes' native `review` status (assigned to the reviewer, claimed via
+`claim_review_task`); the node then settles on the post-review outcome. The work
+is the real board card throughout — no parallel workflow-owned card.
+
 ## Boards (project scope)
 
 A project run's cards live on the **project's own board** — the board slug is
@@ -88,8 +112,24 @@ A `script` node runs an operator-authored shell command, so its mitigations
   `execution.script_env_allowlist` (comma-separated), intersected with the
   node's own `env` list — never the full process env. The allowlist is empty by
   default, so a command runs with no inherited environment: add `PATH` (and any
-  of `HOME` / `LANG` / `CI` it needs) to the allowlist, or commands that resolve
-  a binary by `PATH` will fail to find it.
+  of `LANG` / `CI` it needs) to the allowlist, or commands that resolve a binary
+  by `PATH` will fail to find it.
+- **HOME is always provided.** `HOME` (the orchestrator's own home directory) is
+  passed to every script command regardless of the allowlist, because
+  HOME-credential CLIs (`claude`, `codex`, `gh`, `rclone`, …) resolve their
+  config and credentials from it (`~/.claude`, `~/.config`, …) — without it such
+  a command fails (e.g. `claude -p` returns "Not logged in"). HOME is the home
+  directory, not a secret, so this does not widen secret exposure.
+
+> **Agent bash-tool HOME caveat.** The HOME guarantee above covers `script`
+> nodes. An `agent_task` node's worker shells out through the *Hermes agent's*
+> bash tool, whose environment (including `HOME`) is owned by the host, not by
+> this plugin. A hermes-kind agent's bash tool may run with a non-login `HOME`
+> (e.g. a per-session sandbox), so a HOME-credential CLI invoked from inside an
+> agent prompt can fail to resolve credentials even though the same CLI works for
+> the login user. That is a host-side contract: ensure the agent runtime exposes
+> the intended `HOME`, or have the node call a wrapper that sets it. This plugin
+> does not (and cannot) override the host agent's bash-tool environment.
 - **Workdir and a timeout.** The command runs in its `workdir` and is killed on
   `timeout_seconds` (settling `failure`). Set a `workdir` to contain the command
   to a known directory — with none, it runs in the orchestrator's working
@@ -107,8 +147,61 @@ validation (`approved` / `rejected` / `needs_changes`, and only while the node
 is actually awaiting review):
 
 - the `workflow_review` model tool,
-- the CLI: `hermes-workflows review <run_id> <node_id> <decision>`,
+- a plain chat reply in the run's origin chat — see the operator->run channel below,
+- the `/workflow review <run> <node> <decision> [note]` chat slash command (CLI
+  and gateway/messenger sessions),
+- the CLI: `hermes-workflows review <run_id> <node_id> <decision> [--note "…"]`,
 - the dashboard: `POST /api/plugins/workflows/runs/{run_id}/review`.
+
+Each surface accepts an optional **note** — a free-text operator payload that
+lands on the gate node as `review_note` and is consumable by a downstream
+`agent_task` via `input_mapping: {x: "{{nodes.<gate>.review_note}}"}` (a channel
+distinct from a work node's `.output`). This is how a gate feeds the operator's
+choice or instructions into the rest of the run.
+
+On entering the gate the run delivers one **ACTION NEEDED** notice to its origin
+naming the gate, the allowed decisions, and how to resolve it.
+
+### Operator→run channel (chat reply)
+
+A run paused on a gate notifies its origin chat. The operator can resolve it by
+**replying in that chat with a decision** — `approved`, `rejected`, or
+`needs_changes`, optionally followed by a note that becomes
+`{{nodes.<gate>.review_note}}`. A `pre_gateway_dispatch` hook
+(`hermes_workflows/gate_reply.py`) intercepts the reply, routes it to the run's
+gate through the same `decide_review` path, and stops the gateway agent from also
+consuming it. Without this the reply would be swallowed by the normal gateway
+agent in a fresh session and never reach the paused run.
+
+The match is deterministic and language-agnostic: only the exact decision enum
+tokens count (never NL guesses like "yes" or "1"), and the reply is routed only
+when the origin chat has exactly one run waiting on a gate. Zero or more than one
+waiting gate in the chat falls through to normal dispatch rather than guessing;
+disambiguate with `/workflow review <run> <node> <decision>` or the dashboard.
+Telegram inline-keyboard buttons whose callback resolves the gate are a possible
+future enhancement on top of this channel (they need host support for plugin
+button callbacks); the tagged-reply route here needs none.
+
+## Wait nodes (worker-free external waits)
+
+A `wait` node blocks the run on an external signal without spending a worker. It
+parks active and the engine evaluates its `wait_for` predicate inside the
+periodic tick — no Kanban card, no LLM worker — settling the node `success` /
+`failure` (then it branches on `node_status` like any work node). The one
+condition today is `github_pr_merged`: the tick runs `gh pr view <ref> --json
+state` and settles `success` on MERGED, `failure` on CLOSED-not-merged, and
+keeps waiting on OPEN; a transient `gh` error just retries next tick. The `<ref>`
+is a literal PR url/number or a `{{nodes.<id>.output}}` reference resolved at
+poll time. `gh` resolves its credentials from the tick process's own HOME (it
+runs as the login user). An optional `timeout_seconds` settles the node `failure`
+if the signal has not arrived in time.
+
+This replaces the agent_task poll-loop stopgap (a worker per poll window) with a
+zero-worker wait, so "merge the PR → release publishes" runs at no polling cost
+and with no chat. A GitHub webhook that resolves the node instantly (no polling)
+is the optimal form but needs an upstream Hermes event→run binding that does not
+exist yet (the same wiring the chat-reply channel would use), so it is not
+stubbed; the tick-poll above works today.
 
 ## Inline mode (`execution.default_mode`)
 

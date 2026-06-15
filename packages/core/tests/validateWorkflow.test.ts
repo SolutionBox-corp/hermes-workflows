@@ -289,4 +289,130 @@ describe("validateWorkflow — input_mapping", () => {
       "unused_input_mapping",
     );
   });
+
+  // gate(human_review) -> b, with b consuming the gate's review_note.
+  function gateIm(mapping: Record<string, string>): Workflow {
+    return wf(
+      base({
+        nodes: [
+          { id: "gate", type: "human_review" },
+          { id: "b", type: "agent_task", prompt: "note: {{n}}", input_mapping: mapping },
+          { id: "done", type: "finish" },
+        ],
+        edges: [
+          { from: "gate", to: "b" },
+          { from: "b", to: "done" },
+        ],
+      }),
+    );
+  }
+
+  test("accepts a review_note reference from a human_review ancestor", () => {
+    expect(validateWorkflow(gateIm({ n: "{{nodes.gate.review_note}}" })).valid).toBe(true);
+  });
+
+  test("rejects a review_note reference from a non-human_review node", () => {
+    // 'a' (agent_task) has no review_note channel.
+    expect(codes(im({ data: "{{nodes.a.review_note}}" }))).toContain("review_note_source");
+  });
+});
+
+describe("validateWorkflow — adopt / task_ref", () => {
+  function adopt(extra: Record<string, unknown>): Workflow {
+    return wf(
+      base({
+        nodes: [
+          { id: "a", type: "agent_task", prompt: "produce" },
+          { id: "drive", type: "agent_task", prompt: "drive", ...extra },
+          { id: "done", type: "finish" },
+        ],
+        edges: [
+          { from: "a", to: "drive" },
+          { from: "drive", to: "done" },
+        ],
+      }),
+    );
+  }
+
+  test("accepts an adopt node with a literal task id", () => {
+    expect(validateWorkflow(adopt({ adopt: true, task_ref: "t_abc123" })).valid).toBe(true);
+  });
+
+  test("accepts an adopt node with a typed task_ids reference to an ancestor", () => {
+    expect(
+      validateWorkflow(adopt({ adopt: true, task_ref: "{{nodes.a.output.task_ids}}" })).valid,
+    ).toBe(true);
+  });
+
+  test("rejects adopt with no task_ref", () => {
+    expect(codes(adopt({ adopt: true }))).toContain("adopt_without_task_ref");
+  });
+
+  test("rejects a task_ref without adopt", () => {
+    expect(codes(adopt({ task_ref: "t_abc123" }))).toContain("task_ref_without_adopt");
+  });
+
+  test("rejects a malformed task_ref", () => {
+    expect(codes(adopt({ adopt: true, task_ref: "not a ref!" }))).toContain("invalid_task_ref");
+  });
+
+  test("rejects a task_ids reference to a non-ancestor node", () => {
+    expect(codes(adopt({ adopt: true, task_ref: "{{nodes.done.output.task_ids}}" }))).toContain(
+      "non_ancestor_task_ref",
+    );
+  });
+
+  test("accepts an adopt node with a review_profile", () => {
+    expect(
+      validateWorkflow(adopt({ adopt: true, task_ref: "t_abc123", review_profile: "qa" })).valid,
+    ).toBe(true);
+  });
+
+  test("rejects a review_profile without adopt", () => {
+    expect(codes(adopt({ review_profile: "qa" }))).toContain("review_profile_without_adopt");
+  });
+});
+
+describe("validateWorkflow — wait nodes", () => {
+  function waitWf(extra: Record<string, unknown>): Workflow {
+    return wf(
+      base({
+        nodes: [
+          { id: "a", type: "agent_task", prompt: "open the PR" },
+          { id: "merge", type: "wait", ...extra },
+          { id: "done", type: "finish" },
+        ],
+        edges: [
+          { from: "a", to: "merge" },
+          { from: "merge", to: "done" },
+        ],
+      }),
+    );
+  }
+
+  test("accepts a literal PR ref", () => {
+    expect(validateWorkflow(waitWf({ wait_for: { github_pr_merged: "123" } })).valid).toBe(true);
+  });
+
+  test("accepts a {{nodes.<id>.output}} ref to an ancestor", () => {
+    expect(
+      validateWorkflow(waitWf({ wait_for: { github_pr_merged: "{{nodes.a.output}}" } })).valid,
+    ).toBe(true);
+  });
+
+  test("rejects an empty ref", () => {
+    expect(codes(waitWf({ wait_for: { github_pr_merged: "  " } }))).toContain("empty_wait_ref");
+  });
+
+  test("rejects a malformed template ref", () => {
+    expect(codes(waitWf({ wait_for: { github_pr_merged: "{{nodes.a}}" } }))).toContain(
+      "invalid_wait_ref",
+    );
+  });
+
+  test("rejects a ref to a non-ancestor node", () => {
+    expect(codes(waitWf({ wait_for: { github_pr_merged: "{{nodes.done.output}}" } }))).toContain(
+      "non_ancestor_wait_ref",
+    );
+  });
 });

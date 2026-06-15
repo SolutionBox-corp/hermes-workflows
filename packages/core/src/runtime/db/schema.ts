@@ -33,8 +33,20 @@ CREATE TABLE IF NOT EXISTS workflow_node_runs (
   node_id         TEXT NOT NULL,
   status          TEXT NOT NULL,
   hermes_task_id  TEXT,
+  -- JSON arrays for adopt nodes: the existing card ids the node drives, and the
+  -- subset already routed through the native review stage. Added after the
+  -- initial schema, so connection.ts ALTERs pre-existing databases.
+  driven_task_ids TEXT,
+  reviewed_task_ids TEXT,
+  -- Epoch seconds a wait node began polling (for its optional timeout). Added
+  -- after the initial schema, so connection.ts ALTERs pre-existing databases.
+  wait_started_at TEXT,
   outcome         TEXT,
   review_decision TEXT,
+  -- Optional operator free-text payload attached when resolving a human_review
+  -- gate, consumable downstream as {{nodes.<gate>.review_note}}. Added after the
+  -- initial schema, so connection.ts ALTERs pre-existing databases.
+  review_note     TEXT,
   seq             INTEGER,
   output_json     TEXT,
   error           TEXT,

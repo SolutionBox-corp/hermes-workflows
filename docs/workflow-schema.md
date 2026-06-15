@@ -81,6 +81,19 @@ nothing-to-report run stays quiet. Any non-empty string is accepted — the
 gateway validates the platform downstream. Left unset, run-lifecycle notices
 behave exactly as before.
 
+## Notifications
+
+```yaml
+notifications:
+  subscribe_cards: false   # optional; default true
+```
+
+Each Kanban-backed node card subscribes the run's origin to its native terminal
+event (the `✔ Kanban … done` ping per card). On a long autonomous workflow that
+floods the chat. `notifications.subscribe_cards: false` silences the per-card
+pings while keeping run-level lifecycle notices (run failed / completed) and any
+explicit `hermes send` calls in node prompts. Absent means `true` (unchanged).
+
 ## Template parameters
 
 A workflow used as a template can declare typed parameters (mirroring Hermes
@@ -115,6 +128,19 @@ deep-link resolution are host surfaces pending upstream Hermes support.
     max_retries: 1
     timeout_seconds: 3600
   ```
+  An agent_task can instead **drive an existing board card** rather than create
+  one — the native Kanban flow where the work is the card:
+  ```yaml
+  - id: drive
+    type: agent_task
+    profile: fullstack-engineer
+    adopt: true
+    task_ref: "{{nodes.lock-scope.output.task_ids}}"  # or a literal id, e.g. t_abc123
+    review_profile: qa-engineer   # optional native review stage after each card is done
+    prompt: ""                    # unused when adopting (the card carries its own)
+  ```
+  `task_ref` resolves to the card id(s) to drive; the node settles only when all
+  of them are terminal. See `execution.md` ("Driving existing cards").
 - **script** — a deterministic shell command run with no LLM (lint, tests, a
   build step). It settles `success`/`failure` by exit code, so it branches on
   `node_status` like any work node. It runs locally in the plugin in any scope.
@@ -130,6 +156,20 @@ deep-link resolution are host surfaces pending upstream Hermes support.
   exposes only `execution.script_env_allowlist` vars — see `execution.md`.
 - **condition** — a routing-only node; its outgoing edges carry the conditions.
 - **human_review** — pauses the run; `options: [approved, rejected, needs_changes]`.
+  The resolution may carry an optional operator note, consumable downstream as
+  `{{nodes.<gate>.review_note}}` (see `execution.md`).
+- **wait** — a worker-free wait for an external signal, polled in the engine
+  tick (no Kanban card, no LLM worker). It settles `success`/`failure` and
+  branches on `node_status` like any work node.
+  ```yaml
+  - id: merge
+    type: wait
+    wait_for:
+      github_pr_merged: "{{nodes.open_pr.output}}"  # PR url/number, or a node ref
+    timeout_seconds: 86400        # optional; failure on expiry
+  ```
+  Today one condition exists: `github_pr_merged` (success on MERGED, failure on
+  CLOSED-not-merged, keep waiting on OPEN). See `execution.md`.
 - **finish** — terminal; `outcome: success | failure`.
 
 The entry node is the one with no incoming edge (exactly one is required).

@@ -11,7 +11,11 @@ import { SCHEMA_SQL } from "./schema.ts";
 export function openRunsDatabase(path: string): Database {
   const db = new Database(path, { create: true });
   db.run("PRAGMA journal_mode = WAL");
-  db.run("PRAGMA busy_timeout = 5000");
+  // A generous busy timeout: the dashboard reads/writes in-process while the
+  // advance tick's out-of-process core-CLI subprocess writes the same db. Under
+  // load a writer can hold the lock for several seconds, so wait rather than
+  // fail with SQLITE_BUSY ("database is locked").
+  db.run("PRAGMA busy_timeout = 30000");
   db.run("PRAGMA foreign_keys = ON");
   for (const statement of SCHEMA_SQL.split(";")) {
     const trimmed = statement.trim();
@@ -30,7 +34,13 @@ export function openRunsDatabase(path: string): Database {
  */
 function migrate(db: Database): void {
   addMissingTextColumns(db, "workflow_runs", ["origin", "notified"]);
-  addMissingTextColumns(db, "workflow_node_runs", ["telemetry_json"]);
+  addMissingTextColumns(db, "workflow_node_runs", [
+    "telemetry_json",
+    "review_note",
+    "driven_task_ids",
+    "reviewed_task_ids",
+    "wait_started_at",
+  ]);
 }
 
 function addMissingTextColumns(db: Database, table: string, names: string[]): void {

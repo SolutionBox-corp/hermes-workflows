@@ -71,12 +71,33 @@ export interface NodeRunState {
   status: NodeStatus;
   /** Kanban task backing this node, when one was created. */
   hermes_task_id?: string;
+  /**
+   * For an `adopt` node, the existing board card(s) it drives. The node settles
+   * only when ALL of these reach a terminal state. `hermes_task_id` mirrors the
+   * first id (for telemetry / subscription); the gating reads this list.
+   */
+  driven_task_ids?: string[];
+  /**
+   * Driven cards already routed through the native review stage (adopt nodes with
+   * a `review_profile`), so the done->review transition fires exactly once per
+   * card and the node settles on the post-review terminal state.
+   */
+  reviewed_task_ids?: string[];
   /** Set once the node reaches a terminal state. */
   outcome?: NodeOutcome;
   /** Decision recorded for a human_review node. */
   review_decision?: ReviewOption;
+  /**
+   * Optional free-text payload the operator attached when resolving a
+   * human_review gate (e.g. which option they picked, or instructions). Lands in
+   * run state and is consumable downstream as `{{nodes.<gate>.review_note}}`,
+   * a channel distinct from a work node's `.output`.
+   */
+  review_note?: string;
   /** Captured node output (e.g. the worker's completion summary). */
   output?: string;
+  /** Epoch seconds a `wait` node first began polling, for its optional timeout. */
+  wait_started_at?: number;
   error?: string;
   /**
    * Monotonic completion order within the run, assigned by the bridge each time

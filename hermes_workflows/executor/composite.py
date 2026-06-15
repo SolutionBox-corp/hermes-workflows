@@ -40,3 +40,19 @@ class CompositeExecutor:
     def poll(self, handle: str) -> Completion:
         target = self.script if handle.startswith(_HANDLE_PREFIX) else self.scope
         return target.poll(handle)
+
+    def adopt(self, task_id: str, *, assignee: str) -> str:
+        """Drive an existing board card — a scope-backend (Kanban) capability;
+        script nodes never adopt. Raises if the scope executor cannot adopt."""
+        adopt = getattr(self.scope, "adopt", None)
+        if adopt is None:
+            raise ValueError("adopt requires a Kanban-backed (project) scope")
+        return adopt(task_id, assignee=assignee)
+
+    def send_to_review(self, task_id: str, *, reviewer: str) -> None:
+        """Route a driven card through the native review stage via the scope
+        backend. Raises if the scope executor has no review stage."""
+        send = getattr(self.scope, "send_to_review", None)
+        if send is None:
+            raise ValueError("native review requires a Kanban-backed (project) scope")
+        send(task_id, reviewer=reviewer)

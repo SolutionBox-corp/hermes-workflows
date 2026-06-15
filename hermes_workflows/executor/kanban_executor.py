@@ -43,6 +43,16 @@ class KanbanExecutor:
             iteration=iteration,
         )
 
+    def adopt(self, task_id: str, *, assignee: str) -> str:
+        """Drive an existing card on this board (assign + promote into dispatch),
+        returning its id as the handle. See :func:`kanban.adopt_task`."""
+        return kanban.adopt_task(self.board_conn, task_id, assignee=assignee)
+
+    def send_to_review(self, task_id: str, *, reviewer: str) -> None:
+        """Route a completed driven card through the native review stage (assign
+        reviewer, done -> review). See :func:`kanban.route_to_review`."""
+        kanban.route_to_review(self.board_conn, task_id, reviewer=reviewer)
+
     def poll(self, handle: str) -> Completion:
         completion = kanban.read_completion(self.board_conn, handle)
         settled = completion.settled and completion.outcome is not None
@@ -50,4 +60,5 @@ class KanbanExecutor:
             settled=settled,
             outcome=completion.outcome,
             output=completion.output,
+            status=completion.status,
         )

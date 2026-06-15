@@ -38,6 +38,11 @@ _REVIEW_SCHEMA = {
         "run_id": {"type": "string"},
         "node_id": {"type": "string"},
         "decision": {"type": "string", "enum": ["approved", "rejected", "needs_changes"]},
+        "note": {
+            "type": "string",
+            "description": "Optional operator payload (e.g. the picked option or instructions), "
+            "consumable downstream as {{nodes.<gate>.review_note}}.",
+        },
     },
     "required": ["run_id", "node_id", "decision"],
     "additionalProperties": False,
@@ -53,13 +58,21 @@ def register(ctx: Any) -> None:
             pass
 
     # Capture each turn's chat origin before dispatch so a model-started
-    # workflow_run can carry it (tool handlers never see the SessionSource).
+    # workflow_run can carry it (tool handlers never see the SessionSource), and
+    # route an operator's decision reply to a run paused on a human_review gate
+    # (the native operator->run channel). Both are pre_gateway_dispatch hooks.
     register_hook = getattr(ctx, "register_hook", None)
     if callable(register_hook):
         try:
             from .origin_capture import capture_origin
 
             register_hook("pre_gateway_dispatch", capture_origin)
+        except Exception:
+            pass
+        try:
+            from .gate_reply import route_chat_reply
+
+            register_hook("pre_gateway_dispatch", route_chat_reply)
         except Exception:
             pass
 
@@ -107,6 +120,97 @@ def register(ctx: Any) -> None:
         handler=_handle_review,
         description="Resolve a human_review node (approved/rejected/needs_changes) and advance the run.",
     )
+
+    # In-session slash command, available in CLI AND gateway (messenger)
+    # sessions. Guarded: a host without register_command simply skips it and the
+    # model tools above still work. `args_hint` lets gateway adapters (e.g.
+    # Discord's native picker) surface an argument field.
+    register_command = getattr(ctx, "register_command", None)
+    if callable(register_command):
+        register_command(
+            "workflow",
+            _handle_command,
+            description="Run and manage Workflows (list / run / status / review / cancel / explain).",
+            args_hint="run <id> | status <run> | review <run> <node> <decision> | cancel <run> | list",
+        )
+
+
+_COMMAND_USAGE = (
+    "Usage: /workflow list | run <id> [project] | status <run_id> | "
+    "review <run_id> <node_id> <approved|rejected|needs_changes> [note] | "
+    "cancel <run_id> | explain <id>"
+)
+
+
+def _handle_command(raw_args: str = "", **_kwargs: Any) -> str:
+    """The `/workflow` slash command: a thin chat front-end over the same tools
+    the model uses. Returns a short human-readable line (handlers never raise to
+    the gateway — a failure is reported as text)."""
+    import uuid
+
+    from . import config, tools
+
+    parts = (raw_args or "").strip().split()
+    if not parts or parts[0] in ("help", "-h", "--help"):
+        return _COMMAND_USAGE
+    sub, rest = parts[0], parts[1:]
+    roots, core_cli = config.spec_roots(), config.core_cli()
+    try:
+        if sub == "list":
+            workflows = tools.list_workflows(roots=roots, core_cli=core_cli)["workflows"]
+            if not workflows:
+                return "No workflows found."
+
+            def _trigger(value: Any) -> str:
+                return value.get("type", "?") if isinstance(value, dict) else str(value)
+
+            return "Workflows:\n" + "\n".join(
+                f"- {w['id']} ({w['scope']}, {_trigger(w['trigger'])}"
+                f"{'' if w['enabled'] else ', disabled'})"
+                for w in workflows
+            )
+        if sub == "run":
+            if not rest:
+                return "Usage: /workflow run <workflow_id> [project]"
+            run_id = f"run_{uuid.uuid4().hex[:12]}"
+            result = tools.run_workflow(
+                rest[0],
+                engine=_build_engine(),
+                roots=roots,
+                core_cli=core_cli,
+                run_id=run_id,
+                project_id=rest[1] if len(rest) > 1 else None,
+            )
+            return f"Started run {result['run_id']} ({result['status']})."
+        if sub == "status":
+            if not rest:
+                return "Usage: /workflow status <run_id>"
+            status = tools.workflow_status(rest[0], engine=_build_engine())
+            current = status.get("current_node")
+            tail = f", current node {current}" if current else ""
+            return f"Run {status['run_id']}: {status['status']}{tail}."
+        if sub == "review":
+            if len(rest) < 3:
+                return "Usage: /workflow review <run_id> <node_id> <decision> [note]"
+            note = " ".join(rest[3:]) or None
+            result = tools.review_workflow(
+                rest[0], rest[1], rest[2], engine=_build_engine(), roots=roots, core_cli=core_cli, note=note
+            )
+            return f"Resolved gate {rest[1]} as {result['decision']} (run {result['status']})."
+        if sub == "cancel":
+            if not rest:
+                return "Usage: /workflow cancel <run_id>"
+            result = _build_engine().cancel(rest[0])
+            return f"Cancelled run {rest[0]} ({result.get('status')})."
+        if sub == "explain":
+            if not rest:
+                return "Usage: /workflow explain <workflow_id>"
+            explained = tools.explain_workflow(rest[0], roots=roots, core_cli=core_cli)
+            summary = explained.get("summary") or explained.get("name") or rest[0]
+            return f"{rest[0]}: {summary}"
+        return _COMMAND_USAGE
+    except Exception as exc:  # noqa: BLE001 - a slash command never crashes the session
+        return f"workflow command failed: {exc}"
 
 
 def _handle_list(args: Any = None, **_kwargs: Any) -> str:
@@ -163,6 +267,7 @@ def _handle_review(args: dict, **_kwargs: Any) -> str:
             engine=_build_engine(),
             roots=config.spec_roots(),
             core_cli=config.core_cli(),
+            note=args.get("note"),
         )
     )
 

@@ -26,11 +26,17 @@ const CRON_TOKEN = /^(\*|\?|\*\/\d+|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/;
 // it from escaping the storage root via path traversal.
 const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-// An input_mapping value references exactly one prior node's captured output.
-const INPUT_REF_PATTERN = /^\{\{nodes\.([A-Za-z0-9_-]+)\.output\}\}$/;
+// An input_mapping value references one prior node's captured output, or a
+// human_review gate's operator note (a distinct channel from `.output`).
+const INPUT_REF_PATTERN = /^\{\{nodes\.([A-Za-z0-9_-]+)\.(output|review_note)\}\}$/;
 
 // An event_mapping value references a path into the trigger event payload.
 const EVENT_REF_PATTERN = /^\{event\.[A-Za-z0-9_.]+\}$/;
+
+// A task_ref is either a literal board task id (slug) or a typed reference to an
+// upstream node's surfaced task ids.
+const TASK_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const TASK_IDS_REF_PATTERN = /^\{\{nodes\.([A-Za-z0-9_-]+)\.output\.task_ids\}\}$/;
 
 function isValidCron(expr: string): boolean {
   const parts = expr.trim().split(/\s+/);
@@ -140,6 +146,8 @@ export function validateWorkflow(workflow: Workflow): ValidationResult {
   }
 
   validateInputMappings(workflow, nodes, err);
+  validateAdopt(workflow, nodes, err);
+  validateWait(workflow, nodes, err);
 
   // Exactly one entry node; at least one finish; reachability.
   const entries = entryNodes(workflow);
@@ -217,11 +225,12 @@ function validateInputMappings(
       if (!match) {
         err(
           "invalid_input_mapping_ref",
-          `node '${node.id}'.input_mapping.${key} must be of the form '{{nodes.<id>.output}}', got '${ref}'`,
+          `node '${node.id}'.input_mapping.${key} must be of the form '{{nodes.<id>.output}}' or '{{nodes.<id>.review_note}}', got '${ref}'`,
         );
         continue;
       }
       const source = match[1] as string;
+      const channel = match[2] as string;
       if (!nodes.has(source)) {
         err(
           "unknown_input_mapping_node",
@@ -229,12 +238,108 @@ function validateInputMappings(
         );
         continue;
       }
+      if (channel === "review_note" && nodes.get(source)?.type !== "human_review") {
+        err(
+          "review_note_source",
+          `node '${node.id}'.input_mapping.${key} reads '.review_note' from '${source}', which is not a human_review node`,
+        );
+      }
       if (source === node.id || !reachableFrom(workflow, source).has(node.id)) {
         err(
           "non_ancestor_input_mapping",
           `node '${node.id}'.input_mapping.${key} references '${source}', which is not an ancestor of '${node.id}'`,
         );
       }
+    }
+  }
+}
+
+// adopt / task_ref: only an adopt node may carry a task_ref, an adopt node must
+// carry one, and the ref is either a literal board id or a typed reference to an
+// ancestor node's surfaced task ids.
+function validateAdopt(
+  workflow: Workflow,
+  nodes: ReturnType<typeof nodeMap>,
+  err: (code: string, message: string) => void,
+): void {
+  for (const node of workflow.nodes) {
+    if (node.type !== "agent_task") continue;
+    const { adopt, task_ref } = node;
+    if (task_ref !== undefined && adopt !== true) {
+      err("task_ref_without_adopt", `node '${node.id}' has a task_ref but adopt is not set`);
+    }
+    if (node.review_profile !== undefined && adopt !== true) {
+      err(
+        "review_profile_without_adopt",
+        `node '${node.id}' has a review_profile but is not an adopt node`,
+      );
+    }
+    if (adopt === true && task_ref === undefined) {
+      err("adopt_without_task_ref", `adopt node '${node.id}' has no task_ref to drive`);
+      continue;
+    }
+    if (task_ref === undefined) continue;
+    const refMatch = TASK_IDS_REF_PATTERN.exec(task_ref);
+    if (refMatch) {
+      const source = refMatch[1] as string;
+      if (!nodes.has(source)) {
+        err(
+          "unknown_task_ref_node",
+          `node '${node.id}'.task_ref references unknown node '${source}'`,
+        );
+      } else if (source === node.id || !reachableFrom(workflow, source).has(node.id)) {
+        err(
+          "non_ancestor_task_ref",
+          `node '${node.id}'.task_ref references '${source}', which is not an ancestor of '${node.id}'`,
+        );
+      }
+    } else if (!TASK_ID_PATTERN.test(task_ref)) {
+      err(
+        "invalid_task_ref",
+        `node '${node.id}'.task_ref must be a board task id or '{{nodes.<id>.output.task_ids}}', got '${task_ref}'`,
+      );
+    }
+  }
+}
+
+// wait nodes: the github_pr_merged ref is a non-empty literal or a typed
+// `{{nodes.<id>.output}}` reference to an ancestor (resolved at poll time).
+const WAIT_OUTPUT_REF = /^\{\{nodes\.([A-Za-z0-9_-]+)\.output\}\}$/;
+
+function validateWait(
+  workflow: Workflow,
+  nodes: ReturnType<typeof nodeMap>,
+  err: (code: string, message: string) => void,
+): void {
+  for (const node of workflow.nodes) {
+    if (node.type !== "wait") continue;
+    // Trim first so detection matches the runtime resolver (which strips before
+    // matching the template) — a padded "  {{…}}" must not slip through as literal.
+    const ref = node.wait_for.github_pr_merged.trim();
+    if (ref === "") {
+      err("empty_wait_ref", `wait node '${node.id}'.wait_for.github_pr_merged is empty`);
+      continue;
+    }
+    if (!ref.startsWith("{{")) continue; // a literal PR ref (url/number)
+    const match = WAIT_OUTPUT_REF.exec(ref);
+    if (!match) {
+      err(
+        "invalid_wait_ref",
+        `wait node '${node.id}'.wait_for.github_pr_merged must be a PR ref or '{{nodes.<id>.output}}', got '${ref}'`,
+      );
+      continue;
+    }
+    const source = match[1] as string;
+    if (!nodes.has(source)) {
+      err(
+        "unknown_wait_ref_node",
+        `wait node '${node.id}'.wait_for references unknown node '${source}'`,
+      );
+    } else if (source === node.id || !reachableFrom(workflow, source).has(node.id)) {
+      err(
+        "non_ancestor_wait_ref",
+        `wait node '${node.id}'.wait_for references '${source}', which is not an ancestor of '${node.id}'`,
+      );
     }
   }
 }

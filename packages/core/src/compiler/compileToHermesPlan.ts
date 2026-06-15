@@ -5,6 +5,7 @@
  */
 
 import type { Workflow, Trigger, MemoryProviderKind, Scope } from "../schema/workflow.ts";
+import type { WaitCondition } from "../schema/nodes.ts";
 import { entryNodes } from "../schema/graph.ts";
 import { catalogEntry } from "../templates/params.ts";
 import type { WorkflowParam, CatalogEntry } from "../templates/params.ts";
@@ -28,6 +29,12 @@ export interface CompiledKanbanTask {
   workspace?: "scratch" | "worktree";
   timeout_seconds?: number;
   max_retries?: number;
+  /** Drive an existing card instead of creating one (see AgentTaskNode.adopt). */
+  adopt?: boolean;
+  /** The id (or `{{nodes.<id>.output.task_ids}}` reference) to drive when adopting. */
+  task_ref?: string;
+  /** Reviewer profile for a native review stage on a driven card (see AgentTaskNode). */
+  review_profile?: string;
 }
 
 /** A script node compiled for local execution by the plugin's ScriptExecutor.
@@ -39,6 +46,15 @@ export interface CompiledScript {
   workdir?: string;
   timeout_seconds?: number;
   env?: string[];
+}
+
+/** A wait node compiled for worker-free polling by the engine tick. Peer of
+ *  CompiledKanbanTask / CompiledScript; routed by the `kind` discriminator. */
+export interface CompiledWait {
+  node: string;
+  kind: "wait";
+  wait_for: WaitCondition;
+  timeout_seconds?: number;
 }
 
 export interface CompiledCronJob {
@@ -55,6 +71,9 @@ export interface HermesPlan {
    *  absent leaves run-lifecycle notices unchanged. Preview only — the engine
    *  reads this to route the terminal notice; the gateway validates it. */
   deliver?: string;
+  /** Whether Kanban-backed node cards subscribe the origin to their terminal
+   *  events (the native per-card "done" ping). Defaults true; a spec opts out. */
+  subscribe_cards: boolean;
   /** Typed template parameters (when this workflow is a template). */
   params?: WorkflowParam[];
   /** The per-surface renderings (form fields, /workflow command, deep-link)
@@ -63,6 +82,7 @@ export interface HermesPlan {
   first_node: string | null;
   kanban_tasks: CompiledKanbanTask[];
   script_steps: CompiledScript[];
+  wait_steps: CompiledWait[];
   cron_jobs: CompiledCronJob[];
   profiles: string[];
   skills: string[];
@@ -74,6 +94,7 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
 
   const kanban_tasks: CompiledKanbanTask[] = [];
   const script_steps: CompiledScript[] = [];
+  const wait_steps: CompiledWait[] = [];
   const profiles = new Set<string>();
   const skills = new Set<string>();
 
@@ -88,6 +109,12 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
       script_steps.push(step);
       continue;
     }
+    if (node.type === "wait") {
+      const step: CompiledWait = { node: node.id, kind: "wait", wait_for: node.wait_for };
+      if (node.timeout_seconds !== undefined) step.timeout_seconds = node.timeout_seconds;
+      wait_steps.push(step);
+      continue;
+    }
     if (node.type !== "agent_task") continue;
     const assignee = node.profile ?? defaultProfile ?? "";
     const task: CompiledKanbanTask = {
@@ -100,6 +127,9 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
     };
     if (node.title !== undefined) task.title = node.title;
     if (node.input_mapping !== undefined) task.input_mapping = node.input_mapping;
+    if (node.adopt !== undefined) task.adopt = node.adopt;
+    if (node.task_ref !== undefined) task.task_ref = node.task_ref;
+    if (node.review_profile !== undefined) task.review_profile = node.review_profile;
     if (node.model !== undefined) task.model = node.model;
     if (node.skills !== undefined) task.skills = node.skills;
     if (node.workspace !== undefined) task.workspace = node.workspace.type;
@@ -142,11 +172,13 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
     scope: workflow.scope,
     trigger: workflow.trigger,
     ...(workflow.deliver !== undefined ? { deliver: workflow.deliver } : {}),
+    subscribe_cards: workflow.notifications?.subscribe_cards ?? true,
     ...(workflow.params !== undefined ? { params: workflow.params } : {}),
     ...(catalog !== undefined ? { catalog } : {}),
     first_node: entry ? entry.id : null,
     kanban_tasks,
     script_steps,
+    wait_steps,
     cron_jobs,
     profiles: [...profiles],
     skills: [...skills],

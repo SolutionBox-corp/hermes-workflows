@@ -111,6 +111,57 @@ def _stamp_native_columns(
     conn.commit()
 
 
+def adopt_task(conn: sqlite3.Connection, task_id: str, *, assignee: str) -> str:
+    """Drive an EXISTING board card: assign it to ``assignee`` and promote it into
+    the dispatch lane so the gateway dispatcher claims and runs it. Returns the
+    same ``task_id`` as the handle (no card is created).
+
+    Native ordering: assign BEFORE promote. A ``triage`` card takes the native
+    ``triage -> todo`` step first, then ``promote_task(force=True)`` raises a
+    ``todo`` / ``blocked`` card to ``ready`` regardless of unrelated parent deps
+    (the workflow owns the gating). A card already ``ready`` stays ready (assign
+    does not change status), so promotion is simply skipped.
+
+    Idempotent: a card already ``running`` / ``review`` is being driven, and a
+    ``done`` / ``archived`` card has nothing to drive, so both are a no-op."""
+    task = kb.get_task(conn, task_id)
+    if task is None:
+        raise ValueError(f"adopt: task {task_id} does not exist on this board")
+    if task.status in ("running", "review", "done", "archived"):
+        return task_id
+
+    kb.assign_task(conn, task_id, assignee)
+    current = kb.get_task(conn, task_id).status
+    if current == "triage":
+        conn.execute(
+            "UPDATE tasks SET status = 'todo' WHERE id = ? AND status = 'triage'", (task_id,)
+        )
+        conn.commit()
+        current = "todo"
+    if current in ("todo", "blocked"):
+        ok, reason = kb.promote_task(conn, task_id, actor=CREATED_BY, force=True)
+        if not ok:
+            raise ValueError(f"adopt: could not promote {task_id} to ready: {reason}")
+    return task_id
+
+
+def route_to_review(conn: sqlite3.Connection, task_id: str, *, reviewer: str) -> None:
+    """Route a just-completed driven card through Hermes' native review stage:
+    assign the reviewer and transition ``done -> review`` so the gateway hands it
+    to the reviewer via ``claim_review_task`` (``review -> running``). A card not
+    in ``done`` is left untouched (only a freshly completed card is reviewable) -
+    the status is checked BEFORE assigning so an in-flight card is never
+    reassigned (hijacked)."""
+    task = kb.get_task(conn, task_id)
+    if task is None or task.status != "done":
+        return
+    kb.assign_task(conn, task_id, reviewer)
+    conn.execute(
+        "UPDATE tasks SET status = 'review' WHERE id = ? AND status = 'done'", (task_id,)
+    )
+    conn.commit()
+
+
 @dataclass
 class NodeCompletion:
     found: bool

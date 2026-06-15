@@ -15,6 +15,7 @@ import type {
   EventTrigger,
   EventTriggerType,
   Defaults,
+  NotificationDefaults,
   MemoryProviderKind,
 } from "./workflow.ts";
 import { EVENT_TRIGGER_TYPES } from "./workflow.ts";
@@ -25,6 +26,7 @@ import type {
   HumanReviewNode,
   FinishNode,
   ReviewOption,
+  WaitNode,
 } from "./nodes.ts";
 import { parseUi } from "./ui.ts";
 import type { UiLayout } from "./ui.ts";
@@ -39,7 +41,7 @@ export interface LoadResult {
   ui?: UiLayout;
 }
 
-const NODE_TYPES = new Set(["agent_task", "script", "condition", "human_review", "finish"]);
+const NODE_TYPES = new Set(["agent_task", "script", "condition", "human_review", "finish", "wait"]);
 const SCOPE_TYPES = new Set(["global", "project", "projects"]);
 const REVIEW_OPTIONS = new Set(["approved", "rejected", "needs_changes"]);
 const MEMORY_PROVIDERS = new Set(["auto", "open_second_brain", "none"]);
@@ -91,6 +93,10 @@ export function fromObject(raw: unknown): LoadResult {
   // Where the run result is delivered (DeliveryTarget syntax or "origin"). Any
   // non-empty string is structurally valid; the gateway validates the platform.
   if (rest["deliver"] !== undefined) workflow.deliver = str(rest["deliver"], "deliver");
+  // Notification policy (per-card Kanban subscription opt-out).
+  if (rest["notifications"] !== undefined) {
+    workflow.notifications = parseNotifications(rest["notifications"]);
+  }
   // Typed template parameters (single source of truth for the surface emitters).
   if (rest["params"] !== undefined) workflow.params = parseParams(rest["params"]);
   const ui = parseUi(rawUi);
@@ -237,6 +243,18 @@ function parseEventTrigger(value: Rec, type: EventTriggerType): EventTrigger {
   return trigger;
 }
 
+function parseNotifications(value: unknown): NotificationDefaults {
+  if (!isRecord(value)) fail("notifications must be a mapping");
+  const out: NotificationDefaults = {};
+  if (value["subscribe_cards"] !== undefined) {
+    if (typeof value["subscribe_cards"] !== "boolean") {
+      fail("notifications.subscribe_cards must be a boolean");
+    }
+    out.subscribe_cards = value["subscribe_cards"];
+  }
+  return out;
+}
+
 function parseDefaults(value: unknown): Defaults | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) fail("defaults must be a mapping");
@@ -288,9 +306,30 @@ function parseNode(value: unknown, index: number): WorkflowNode {
       return { ...base, type: "condition" };
     case "human_review":
       return parseHumanReview(value, base, id);
+    case "wait":
+      return parseWait(value, base, id);
     default:
       return parseFinish(value, base);
   }
+}
+
+function parseWait(value: Rec, base: { id: string }, id: string): WaitNode {
+  const raw = value["wait_for"];
+  if (!isRecord(raw)) fail(`node '${id}'.wait_for must be a mapping`);
+  if (typeof raw["github_pr_merged"] !== "string") {
+    fail(`node '${id}'.wait_for must declare a string 'github_pr_merged' (the PR ref)`);
+  }
+  const node: WaitNode = {
+    ...base,
+    type: "wait",
+    wait_for: { github_pr_merged: raw["github_pr_merged"] },
+  };
+  if (value["timeout_seconds"] !== undefined) {
+    if (typeof value["timeout_seconds"] !== "number")
+      fail(`node '${id}'.timeout_seconds must be a number`);
+    node.timeout_seconds = value["timeout_seconds"];
+  }
+  return node;
 }
 
 function optionalText(value: Rec, id: string): { title?: string; description?: string } {
@@ -339,6 +378,16 @@ function parseAgentTask(value: Rec, base: { id: string }, id: string): AgentTask
     if (typeof value["timeout_seconds"] !== "number")
       fail(`node '${id}'.timeout_seconds must be a number`);
     node.timeout_seconds = value["timeout_seconds"];
+  }
+  if (value["adopt"] !== undefined) {
+    if (typeof value["adopt"] !== "boolean") fail(`node '${id}'.adopt must be a boolean`);
+    node.adopt = value["adopt"];
+  }
+  if (value["task_ref"] !== undefined) {
+    node.task_ref = str(value["task_ref"], `node '${id}'.task_ref`);
+  }
+  if (value["review_profile"] !== undefined) {
+    node.review_profile = str(value["review_profile"], `node '${id}'.review_profile`);
   }
   return node;
 }

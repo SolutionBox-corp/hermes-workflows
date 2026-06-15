@@ -4,13 +4,18 @@ All notable changes to Hermes Workflows are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.2.0 - 2026-06-15
 
 A visual overhaul of the dashboard plugin on a shared component kit, richer
 `agent_task` editing backed by live host data, run observability built on
 the Hermes observer-hook contract — per-node agent telemetry, pending
 command-approval surfacing, an opt-in per-run JSONL trace — and editor
 playback: run the workflow you are editing and watch it play on the canvas.
+This release also makes a run Kanban-native (drive existing board cards, with an
+optional native review stage), gives gates a two-way chat channel and an operator
+note, adds a worker-free `wait` node, a `/workflow` chat command and a
+`hermes-workflows cancel` CLI, surfaces blocked cards and live status, and keeps
+hand-authored specs readable.
 
 ### Added
 
@@ -107,6 +112,41 @@ playback: run the workflow you are editing and watch it play on the canvas.
     direct delivery; no local stub is added.)
   - The Schedules page tags each row as a `Workflow` schedule, distinct from
     blueprint cron jobs, and README positions the two tiers.
+- Drive existing Kanban cards: an `agent_task` with `adopt: true` + `task_ref`
+  drives one or more EXISTING board cards (assign the node profile, promote into
+  the dispatch lane, poll to terminal) instead of creating a new card — the
+  native flow where the work is the card. `task_ref` is a literal id or a typed
+  `{{nodes.<id>.output.task_ids}}` reference that extracts the ids an upstream
+  node surfaced; the node gates on all driven cards, idempotent on a card already
+  running, and fails loud on a missing card. An optional `review_profile` routes
+  each completed driven card once through Hermes' native `review` stage.
+- `human_review` resolution carries an optional operator note (`review` CLI
+  `--note`, the `workflow_review` tool, the dashboard), landing on the gate as
+  `review_note` and consumable downstream as `{{nodes.<gate>.review_note}}` — a
+  channel distinct from a work node's `.output`.
+- `hermes-workflows cancel <run_id>`: cancel a run and its active nodes from the
+  shell (wraps the core `run-cancel`; idempotent on terminal runs).
+- A native `/workflow` in-chat slash command (registered via
+  `ctx.register_command`, so it works in the CLI and gateway/messenger sessions,
+  with an args hint for native pickers): `list`, `run <id> [project]`,
+  `status <run>`, `review <run> <node> <decision> [note]`, `cancel <run>`,
+  `explain <id>` — a thin front-end over the same tools the model uses.
+- Node-type icons on canvas nodes, from a shared icon map also used by the
+  header's add-node menu, so the picker and placed nodes match.
+- The node inspector opens during a run in a fully read-only (disabled) state, so
+  a node's configuration can be inspected mid-run without risking an edit.
+- `notifications.subscribe_cards: false` (default true): a spec-level opt-out for
+  the per-card Kanban completion subscriptions, silencing the native `✔ Kanban …
+  done` ping per node on a long autonomous workflow while keeping run-level
+  lifecycle notices and explicit `hermes send` messages.
+- A worker-free `wait` node: it parks active and the engine tick polls its
+  `wait_for` predicate (no Kanban card, no LLM worker), settling success/failure
+  and branching on `node_status`. The first condition is `github_pr_merged`
+  (`gh pr view --json state`: success on MERGED, failure on CLOSED, keep waiting
+  on OPEN), with an optional `timeout_seconds`. Replaces the agent_task poll-loop
+  stopgap so "merge the PR → release publishes" costs zero workers and no chat.
+  (An instant GitHub-webhook resolution is the optimal form but needs upstream
+  Hermes event→run wiring; the tick-poll works today.)
 
 ### Changed
 
@@ -117,6 +157,26 @@ playback: run the workflow you are editing and watch it play on the canvas.
 - The dashboard test suite runs test files sequentially with a 30s per-test
   timeout, so the in-suite bundle build cannot starve interaction tests on a
   loaded machine.
+- The tick detects a blocked underlying card and delivers one ATTENTION notice
+  per card (naming it and how to recover) instead of leaving the run silently
+  inert; the run stays active and resumes when the card is unblocked.
+- `hermes-workflows status` opportunistically read-only-polls each active node's
+  card and reports live state and pending completions, so it no longer lags the
+  tick (the "looks stuck" confusion).
+- The on-disk spec serializer emits `|` block scalars for multiline strings
+  (prompts/commands) when lossless, keeping a hand-authored spec readable across
+  the round trip instead of one-line quoted `"...\n..."` strings.
+- The `human_review` waiting notice is now an actionable ACTION NEEDED message
+  (the gate, the allowed decisions, how to resolve).
+- Operator->run channel: replying in a paused run's origin chat with a decision
+  (`approved` / `rejected` / `needs_changes`, optionally a note) resolves that
+  gate. A `pre_gateway_dispatch` hook routes the reply to the run instead of
+  letting the gateway agent swallow it. Deterministic and language-agnostic
+  (exact decision tokens only), routed only when the chat has exactly one waiting
+  gate; otherwise it falls through to `/workflow review` or the dashboard.
+- Script-node commands always receive `HOME` so HOME-credential CLIs (claude,
+  codex, gh, …) resolve their config; the agent bash-tool HOME caveat is
+  documented.
 
 ### Removed
 

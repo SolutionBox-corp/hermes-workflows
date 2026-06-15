@@ -102,8 +102,12 @@ interface NodeRow {
   node_id: string;
   status: string;
   hermes_task_id: string | null;
+  driven_task_ids: string | null;
+  reviewed_task_ids: string | null;
+  wait_started_at: string | null;
   outcome: string | null;
   review_decision: string | null;
+  review_note: string | null;
   seq: number | null;
   output_json: string | null;
   error: string | null;
@@ -226,13 +230,17 @@ export class RunRepository {
     this.db
       .query(
         `INSERT INTO workflow_node_runs
-           (id, run_id, node_id, status, hermes_task_id, outcome, review_decision, seq, output_json, error, telemetry_json)
-         VALUES ($id, $run, $node, $status, $task, $outcome, $review, $seq, $output, $error, $telemetry)
+           (id, run_id, node_id, status, hermes_task_id, driven_task_ids, reviewed_task_ids, wait_started_at, outcome, review_decision, review_note, seq, output_json, error, telemetry_json)
+         VALUES ($id, $run, $node, $status, $task, $driven, $reviewed, $waitStarted, $outcome, $review, $reviewNote, $seq, $output, $error, $telemetry)
          ON CONFLICT(id) DO UPDATE SET
            status = excluded.status,
            hermes_task_id = excluded.hermes_task_id,
+           driven_task_ids = excluded.driven_task_ids,
+           reviewed_task_ids = excluded.reviewed_task_ids,
+           wait_started_at = excluded.wait_started_at,
            outcome = excluded.outcome,
            review_decision = excluded.review_decision,
+           review_note = excluded.review_note,
            seq = excluded.seq,
            output_json = excluded.output_json,
            error = excluded.error,
@@ -244,8 +252,18 @@ export class RunRepository {
         $node: node.node_id,
         $status: node.status,
         $task: node.hermes_task_id ?? null,
+        $driven:
+          node.driven_task_ids && node.driven_task_ids.length > 0
+            ? JSON.stringify(node.driven_task_ids)
+            : null,
+        $reviewed:
+          node.reviewed_task_ids && node.reviewed_task_ids.length > 0
+            ? JSON.stringify(node.reviewed_task_ids)
+            : null,
+        $waitStarted: node.wait_started_at === undefined ? null : String(node.wait_started_at),
         $outcome: node.outcome ?? null,
         $review: node.review_decision ?? null,
+        $reviewNote: node.review_note ?? null,
         $seq: node.seq ?? null,
         $output: node.output ?? null,
         $error: node.error ?? null,
@@ -270,9 +288,17 @@ export class RunRepository {
         status: n.status as NodeRunState["status"],
       };
       if (n.hermes_task_id !== null) node.hermes_task_id = n.hermes_task_id;
+      if (n.driven_task_ids !== null) {
+        node.driven_task_ids = JSON.parse(n.driven_task_ids) as string[];
+      }
+      if (n.reviewed_task_ids !== null) {
+        node.reviewed_task_ids = JSON.parse(n.reviewed_task_ids) as string[];
+      }
+      if (n.wait_started_at !== null) node.wait_started_at = Number(n.wait_started_at);
       if (n.outcome !== null) node.outcome = n.outcome as NodeRunState["outcome"];
       if (n.review_decision !== null)
         node.review_decision = n.review_decision as NodeRunState["review_decision"];
+      if (n.review_note !== null) node.review_note = n.review_note;
       if (n.seq !== null) node.seq = n.seq;
       if (n.output_json !== null) node.output = n.output_json;
       if (n.error !== null) node.error = n.error;
