@@ -4,7 +4,7 @@ All notable changes to Hermes Workflows are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.3.0 - 2026-06-15
+## 0.3.0 - 2026-06-16
 
 Operator control and run resilience: a free-form run input that overrides node
 prompts at the highest priority, an opt-in sequential mode for driving shared-
