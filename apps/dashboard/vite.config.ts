@@ -1,8 +1,23 @@
 import { defineConfig } from "vite";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
+
+// Single source of truth for the displayed plugin version: this package's
+// manifest (kept in sync with the other manifests on release). Inlined at build
+// time via `define` so the bundle ships the literal, not a runtime lookup.
+const { version: PLUGIN_VERSION } = JSON.parse(
+  readFileSync(resolve(here, "package.json"), "utf8"),
+) as { version: string };
+
+// Monotonic build counter, bumped deliberately by `dashboard:bump` (never inside
+// this build, which must stay deterministic for the dist drift guard). Baked in
+// alongside the version and shown in the header as `vX.Y.Z-bN`.
+const { build: PLUGIN_BUILD } = JSON.parse(
+  readFileSync(resolve(here, "build-number.json"), "utf8"),
+) as { build: number };
 
 // Single self-executing bundle for the Hermes dashboard plugin loader.
 //
@@ -39,6 +54,8 @@ export default defineConfig({
   // `process` reference and dead-code-eliminates the dev builds.
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
+    __PLUGIN_VERSION__: JSON.stringify(PLUGIN_VERSION),
+    __PLUGIN_BUILD__: JSON.stringify(PLUGIN_BUILD),
   },
   build: {
     outDir: resolve(here, "../../dashboard/dist"),

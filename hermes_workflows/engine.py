@@ -34,16 +34,47 @@ REVIEW_OPTIONS = frozenset({"approved", "rejected", "needs_changes"})
 # Terminal run statuses that warrant a single run-lifecycle notice.
 _TERMINAL_STATUSES = frozenset({"completed", "failed"})
 
+# Card statuses where a climbing consecutive-failure counter means the card is
+# parked awaiting dispatch (not actively being worked): the dispatcher keeps
+# failing to make progress on it. `running` is excluded (a worker is on it).
+_STUCK_CARD_STATUSES = frozenset({"ready", "triage", "todo", "review"})
+# How many consecutive dispatch failures on a parked driven card before an adopt
+# node settles failure rather than polling it forever.
+_ADOPT_STUCK_FAILURES = 3
+
 # Backstop for the inline drain: a cyclic script-only workflow could stay
 # inline-eligible indefinitely, so cap the synchronous steps per call and let
 # the durable tick carry on past the cap.
 _MAX_INLINE_STEPS = 10_000
 
 # task_ref resolution: a literal board id, or a typed reference to the task ids
-# an upstream node surfaced in its output (extracted by the board id shape, so a
-# free-text agent output still yields a typed id list, failing loud on none).
+# an upstream node resolved. The reliable source is a STRUCTURED block the worker
+# emits in its output (a fenced ```task_ids block or a <task_ids>…</task_ids>
+# tag); a plain shape-scrape of free text is only a last-resort fallback because
+# it grabs any/stray t_-shaped token and cannot isolate the chosen ones.
 _TASK_IDS_REF = re.compile(r"^\{\{nodes\.([A-Za-z0-9_-]+)\.output\.task_ids\}\}$")
 _TASK_ID_TOKEN = re.compile(r"\bt_[0-9a-z]+\b")
+_TASK_IDS_BLOCK = re.compile(
+    r"```task_ids\b[^\n]*\n(.*?)```|<task_ids>(.*?)</task_ids>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _extract_task_ids_block(text: Optional[str]) -> list[str]:
+    """The task ids a worker listed in a STRUCTURED block in its output - a fenced
+    ```task_ids code block or a ``<task_ids>…</task_ids>`` tag. This isolates the
+    ids the node RESOLVED (e.g. a lock-scope node's chosen scope), independent of
+    any t_-shaped token that happens to appear elsewhere in its prose. Returns an
+    empty list when the output carries no such block."""
+    if not text:
+        return []
+    ids: list[str] = []
+    for match in _TASK_IDS_BLOCK.finditer(text):
+        inner = match.group(1) or match.group(2) or ""
+        for token in _TASK_ID_TOKEN.findall(inner):
+            if token not in ids:
+                ids.append(token)
+    return ids
 
 
 class Engine:
@@ -120,21 +151,26 @@ class Engine:
         run_id: str,
         project_id: Optional[str] = None,
         origin: Optional[str] = None,
+        input: Optional[str] = None,
     ) -> dict:
         """Record a new run without advancing it — the non-blocking half of
         :meth:`run`, for callers (the dashboard start route) that must return
-        before the first node executes."""
+        before the first node executes. ``input`` is the operator's free-form
+        run input, layered above every agent_task prompt at highest priority."""
         args = ["run-create", spec_path, "--db", self.db_path, "--id", run_id]
         if project_id:
             args += ["--project", project_id]
         if origin:
             args += ["--origin", origin]
+        if input:
+            args += ["--input", input]
         created = self._core(args)
         self._trace_emit(
             run_id,
             "run_created",
             workflow_id=(created or {}).get("workflow_id"),
             project_id=project_id,
+            input=input,
         )
         return created
 
@@ -144,8 +180,9 @@ class Engine:
         run_id: str,
         project_id: Optional[str] = None,
         origin: Optional[str] = None,
+        input: Optional[str] = None,
     ) -> dict:
-        self.create(spec_path, run_id, project_id, origin)
+        self.create(spec_path, run_id, project_id, origin, input)
         return self.advance(spec_path, run_id)
 
     def status(self, run_id: str) -> dict:
@@ -342,6 +379,7 @@ class Engine:
         seq = _max_seq(run)
         settled_cards: list[str] = []
         blocked_nodes: list[str] = []
+        stuck_nodes: list[str] = []
         for node_id, node in run["nodes"].items():
             if node.get("status") not in ("scheduled", "running"):
                 continue
@@ -357,18 +395,93 @@ class Engine:
                 self._card_terminal(executor, node, handle, completion, review_profile)
                 for handle, completion in zip(handles, completions)
             ]
-            if all(terminal):
+            # Bound the wait: a driven card the dispatcher cannot make progress on
+            # (consecutive_failures climbing while it sits un-run) would otherwise
+            # be polled forever - the silent-hang this guards against. Settle the
+            # node failure loudly and surface it. Excludes a card that is actively
+            # running (a worker is on it) and terminal cards (handled below). This
+            # also catches an unspawnable review worker: a card parked in `review`
+            # with a climbing counter (e.g. a reviewer profile with an unknown
+            # skill) fails the node instead of bouncing silently.
+            stuck = [
+                (h, c)
+                for h, c in zip(handles, completions)
+                if not c.settled
+                and c.status in _STUCK_CARD_STATUSES
+                and (c.consecutive_failures or 0) >= _ADOPT_STUCK_FAILURES
+            ]
+            if stuck and not all(terminal):
+                handle, comp = stuck[0]
                 seq += 1
                 node["status"] = "completed"
-                node["outcome"] = (
-                    "failure" if any(c.outcome == "failure" for c in completions) else "success"
-                )
+                node["outcome"] = "failure"
                 node["seq"] = seq
-                outputs = [c.output for c in completions if c.output is not None]
-                if outputs:
-                    node["output"] = "\n\n".join(outputs)
+                node["output"] = (
+                    f"adopt stuck: card {handle} could not be dispatched after "
+                    f"{comp.consecutive_failures} consecutive worker failures "
+                    f"(status {comp.status}); settling the node failure instead of "
+                    f"polling forever. Check the card's profile/reviewer skills."
+                )
                 self._merge_telemetry(node)
                 settled_cards.extend(handles)
+                stuck_nodes.append(node_id)
+                continue
+            if all(terminal):
+                batch_failed = any(c.outcome == "failure" for c in completions)
+                batch_outputs = [c.output for c in completions if c.output is not None]
+                seq_state = node.get("adopt_seq")
+                if seq_state and seq_state.get("pending"):
+                    # Sequential adopt: this card is terminal but more remain.
+                    # Stash its result, promote the next card on the shared branch,
+                    # and keep the node active rather than settling.
+                    seq_state.setdefault("outputs", []).extend(batch_outputs)
+                    seq_state["failed"] = bool(seq_state.get("failed")) or batch_failed
+                    next_id = seq_state["pending"][0]
+                    adopt = getattr(executor, "adopt", None)
+                    try:
+                        if adopt is None:
+                            raise RuntimeError(
+                                "sequential adopt requires a Kanban-backed (project) scope"
+                            )
+                        handle = adopt(next_id, assignee=seq_state.get("assignee") or "")
+                    except Exception as exc:  # noqa: BLE001 - fail closed, never wedge the tick
+                        seq += 1
+                        node["status"] = "completed"
+                        node["outcome"] = "failure"
+                        node["seq"] = seq
+                        node["output"] = (
+                            f"sequential adopt failed promoting next card {next_id}: {exc}"
+                        )
+                        node["abort_run"] = True
+                        self._merge_telemetry(node)
+                        settled_cards.extend(handles)
+                        continue
+                    seq_state["pending"].pop(0)
+                    node["driven_task_ids"] = [handle]
+                    node["hermes_task_id"] = handle
+                    node["status"] = "scheduled"
+                    self._subscribe_card(
+                        executor, run, handle, task_params.get(node_id) or {},
+                        plan.get("subscribe_cards", True),
+                    )
+                else:
+                    seq += 1
+                    node["status"] = "completed"
+                    failed = batch_failed or bool(seq_state and seq_state.get("failed"))
+                    node["outcome"] = "failure" if failed else "success"
+                    node["seq"] = seq
+                    prior_outputs = list(seq_state.get("outputs") or []) if seq_state else []
+                    outputs = prior_outputs + batch_outputs
+                    if outputs:
+                        node["output"] = "\n\n".join(outputs)
+                        # Capture the ids the worker listed in a structured block
+                        # in its output (the resolved/chosen ids), so a downstream
+                        # adopt reads them via {{nodes.<id>.output.task_ids}}.
+                        block_ids = _extract_task_ids_block(node["output"])
+                        if block_ids:
+                            node["task_ids"] = block_ids
+                    self._merge_telemetry(node)
+                    settled_cards.extend(handles)
             elif any(c.status == "blocked" for c in completions):
                 # An underlying card was blocked (e.g. a worker error ran
                 # `kanban block`). The node stays active so the tick keeps polling
@@ -418,8 +531,17 @@ class Engine:
                 executor, run, run_id, node_id, task_params.get(node_id), subscribe_cards
             )
 
+        # An adopt node can settle failure SYNCHRONOUSLY during scheduling (it
+        # resolved zero cards to drive) and flag the run to abort. Re-decide so
+        # the run fails closed this tick instead of leaking a 'running' status -
+        # and never advances toward a downstream build/PR - until the next tick.
+        if any(run["nodes"][nid].get("abort_run") for nid in decision["schedule"]):
+            decision = self._advance_decision(spec_path, run)
+            for node_id, status in decision["node_updates"].items():
+                run["nodes"][node_id]["status"] = status
+
         run["status"] = decision["run_status"]
-        self._emit_lifecycle(run, decision, plan.get("deliver"), blocked_nodes)
+        self._emit_lifecycle(run, decision, plan.get("deliver"), blocked_nodes, stuck_nodes)
         self._emit_memory(run, spec_path)
         if prior is not None:
             self._emit_trace(prior, run)
@@ -501,13 +623,15 @@ class Engine:
         decision: dict,
         deliver: Optional[str] = None,
         blocked: Optional[Sequence[str]] = None,
+        stuck: Optional[Sequence[str]] = None,
     ) -> None:
         """Fire run-lifecycle notices once per transition into completed /
-        failed / waiting, and once per underlying card that goes blocked, tracked
-        by persisted markers so a run that stays in a state across ticks is never
-        re-announced. ``deliver`` is the workflow's declared delivery target
-        (compile-preview), routing the notice and, on a completed run, swapping
-        the terse line for the run's result. Fail-open."""
+        failed / waiting, once per underlying card that goes blocked, and once
+        per adopt node settled failed because its driven card was un-dispatchable,
+        tracked by persisted markers so a run that stays in a state across ticks
+        is never re-announced. ``deliver`` is the workflow's declared delivery
+        target (compile-preview), routing the notice and, on a completed run,
+        swapping the terse line for the run's result. Fail-open."""
         notified = list(run.get("notified") or [])
         seen = set(notified)
 
@@ -530,6 +654,13 @@ class Engine:
         for node_id in blocked or []:
             key = f"blocked:{node_id}"
             if key not in seen and self._notify(run, "blocked", node_id=node_id, deliver=deliver):
+                mark(key)
+        # One attention notice per adopt node settled failed because its driven
+        # card could not be dispatched (the bounded-wait escape from a silent
+        # hang). The node is terminal, so this fires exactly once.
+        for node_id in stuck or []:
+            key = f"stuck:{node_id}"
+            if key not in seen and self._notify(run, "stuck", node_id=node_id, deliver=deliver):
                 mark(key)
 
         if notified != (run.get("notified") or []):
@@ -660,8 +791,11 @@ class Engine:
         (where direct delivery cannot reach). No-op for local script handles and
         when there is no origin or board connection, and when the spec opted out
         (`notifications.subscribe_cards: false`) to silence per-card pings while
-        keeping run-level lifecycle notices. Fail-open."""
-        if not subscribe_cards:
+        keeping run-level lifecycle notices. A per-node `notify_completion`
+        overrides that workflow-level default for this card only. Fail-open."""
+        node_pref = params.get("notify_completion") if params else None
+        effective = node_pref if node_pref is not None else subscribe_cards
+        if not effective:
             return
         origin = run.get("origin")
         if not origin or (params and params.get("kind") == "script"):
@@ -712,44 +846,65 @@ class Engine:
         params (the compiled task) are left untouched. A no-mapping node is
         returned unchanged. Raises UnresolvedInput when a reference cannot be
         satisfied (handled by the caller)."""
+        base = params.get("prompt", "")
+        prompt = base
         mapping = params.get("input_mapping")
-        if not mapping:
-            return params
-        channels = {
-            nid: {"output": node.get("output"), "review_note": node.get("review_note")}
-            for nid, node in run["nodes"].items()
-        }
-        resolved_prompt = resolve_input_mapping(params.get("prompt", ""), mapping, channels)
+        if mapping:
+            channels = {
+                nid: {"output": node.get("output"), "review_note": node.get("review_note")}
+                for nid, node in run["nodes"].items()
+            }
+            prompt = resolve_input_mapping(prompt, mapping, channels)
+        # The run-level operator input (if any) is layered ABOVE every agent_task
+        # node's prompt as the highest-priority block: it overrides conflicting
+        # node instructions and otherwise binds as an additional constraint.
+        operator_input = run.get("input")
+        if operator_input:
+            prompt = _layer_operator_input(prompt, operator_input)
+        if prompt == base:
+            return params  # nothing layered or substituted: byte-identical
         resolved = dict(params)
-        resolved["prompt"] = resolved_prompt
+        resolved["prompt"] = prompt
         return resolved
 
     def _resolve_task_ref(self, run: dict, task_ref: str) -> list[str]:
         """The card id(s) an adopt node should drive. A literal id resolves to
-        itself; a ``{{nodes.<id>.output.task_ids}}`` reference extracts the board
-        task ids an upstream node surfaced in its output (by their id shape, so a
-        free-text output still yields a typed list). Fails loud on an empty or
-        unproduced source — never drives zero cards silently."""
+        itself; a ``{{nodes.<id>.output.task_ids}}`` reference reads the ids the
+        source node RESOLVED. Resolution order, most reliable first:
+
+        1. the source node's typed ``task_ids`` (captured from a structured block
+           in its worker output at settle - the chosen ids, isolated);
+        2. a structured ``task_ids`` block parsed from its output directly (robust
+           if the settle-time capture did not run);
+        3. a last-resort shape-scrape of its free-text output (legacy; grabs any
+           t_-shaped token, so it cannot isolate a chosen subset).
+
+        Fails loud when none resolve - never drives zero cards silently."""
         ref = task_ref.strip()
         match = _TASK_IDS_REF.match(ref)
         if not match:
             return [ref]  # literal board task id
         source = match.group(1)
         node = run["nodes"].get(source)
-        output = node.get("output") if node else None
-        if not output:
-            raise UnresolvedInput(
-                f"task_ref references task_ids of node {source!r}, which produced no output"
-            )
-        ids: list[str] = []
+        typed = (node.get("task_ids") if node else None) or []
+        structured = [tid for tid in dict.fromkeys(typed) if tid]
+        if structured:
+            return structured
+        output = (node.get("output") if node else None) or ""
+        block = _extract_task_ids_block(output)
+        if block:
+            return block
+        scraped: list[str] = []
         for token in _TASK_ID_TOKEN.findall(output):
-            if token not in ids:
-                ids.append(token)
-        if not ids:
-            raise UnresolvedInput(
-                f"task_ref node {source!r} output surfaced no task ids to drive"
-            )
-        return ids
+            if token not in scraped:
+                scraped.append(token)
+        if scraped:
+            return scraped
+        raise UnresolvedInput(
+            f"task_ref node {source!r} surfaced no task ids to drive: its output has "
+            f"no task_ids block and no id-shaped token. The node that resolves the "
+            f"choice must emit the chosen ids in a ```task_ids block."
+        )
 
     def _adopt_cards(
         self, executor: NodeExecutor, run: dict, node_id: str, params: dict, subscribe_cards: bool = True
@@ -760,21 +915,42 @@ class Engine:
         or adopt error settles the node failure loudly rather than scheduling it
         in a broken state — the same contract as input_mapping resolution."""
         node = run["nodes"][node_id]
+        sequential = bool(params.get("sequential"))
         try:
             ids = self._resolve_task_ref(run, params.get("task_ref") or "")
             adopt = getattr(executor, "adopt", None)
             if adopt is None:
                 raise ValueError("adopt requires a Kanban-backed (project) scope")
-            driven = [adopt(task_id, assignee=params.get("assignee") or "") for task_id in ids]
+            assignee = params.get("assignee") or ""
+            # Sequential is only meaningful for more than one card: promote the
+            # first now and queue the rest; the poll loop promotes N+1 once N is
+            # terminal, so workers build on prior committed work on one branch.
+            sequential = sequential and len(ids) > 1
+            if sequential:
+                driven = [adopt(ids[0], assignee=assignee)]
+            else:
+                driven = [adopt(task_id, assignee=assignee) for task_id in ids]
         except (UnresolvedInput, ValueError) as exc:
             node["status"] = "completed"
             node["outcome"] = "failure"
             node["output"] = f"adopt failed: {exc}"
             node["seq"] = _max_seq(run) + 1
+            # An adopt that drove ZERO cards did none of the real work; fail the
+            # run closed so it cannot fall through to a downstream build/PR with
+            # an empty branch. The advance engine honours this and does not route
+            # this node's outgoing edges.
+            node["abort_run"] = True
             return
         node["driven_task_ids"] = driven
         node["hermes_task_id"] = driven[0]
         node["status"] = "scheduled"
+        if sequential:
+            node["adopt_seq"] = {
+                "pending": ids[1:],
+                "assignee": assignee,
+                "outputs": [],
+                "failed": False,
+            }
         # Subscribe every driven card to its terminal events for the origin (a
         # multi-card adopt drives more than one).
         for handle in driven:
@@ -900,10 +1076,12 @@ def _notice_text(run: dict, event: str, node_id: Optional[str]) -> str:
         # dashboard / CLI.
         return (
             f"ACTION NEEDED - workflow {workflow_id} run {run_id}: review gate "
-            f"'{node_id}' is waiting for your decision (approved / rejected / "
-            f"needs_changes). Reply in this chat with one of those words "
-            f"(optionally followed by a note), or resolve it from the dashboard "
-            f"or with: hermes-workflows review {run_id} {node_id} <decision> [--note \"...\"]."
+            f"'{node_id}' is waiting for your decision. Reply in this chat with "
+            f"'approved', 'rejected', or 'needs_changes' (optionally followed by a "
+            f"note) - or, if the gate offered choices, just reply with your pick "
+            f"(e.g. a number or a name), which is taken as approval with your reply "
+            f"as the note. You can also resolve it from the dashboard or with: "
+            f"hermes-workflows review {run_id} {node_id} <decision> [--note \"...\"]."
         )
     if event == "blocked":
         card = (run.get("nodes") or {}).get(node_id, {}).get("hermes_task_id")
@@ -913,6 +1091,17 @@ def _notice_text(run: dict, event: str, node_id: Optional[str]) -> str:
             f"'{node_id}'{card_hint} is blocked and the run cannot make progress "
             f"until it is unblocked. Inspect and unblock it on its board, then the "
             f"next tick resumes the run automatically."
+        )
+    if event == "stuck":
+        node = (run.get("nodes") or {}).get(node_id, {})
+        card = node.get("hermes_task_id")
+        card_hint = f" (card {card})" if card else ""
+        return (
+            f"ATTENTION - workflow {workflow_id} run {run_id}: node '{node_id}'"
+            f"{card_hint} was settled FAILED because its driven card could not be "
+            f"dispatched (repeated worker spawn/exec failures); the run stopped "
+            f"polling it instead of hanging. Check the card's profile/reviewer "
+            f"skills on its board."
         )
     return f"Workflow {workflow_id} run {run_id}: {event}."
 
@@ -930,6 +1119,21 @@ def _run_result_output(run: dict) -> Optional[str]:
         if best_seq is None or seq >= best_seq:
             best, best_seq = node["output"], seq
     return best
+
+
+def _layer_operator_input(prompt: str, operator_input: str) -> str:
+    """Layer the run's operator input above a node's prompt as the highest-
+    priority block: it overrides conflicting node instructions and otherwise
+    binds as an additional constraint. Nothing is dropped - the full node prompt
+    follows."""
+    return (
+        "OPERATOR INSTRUCTION - HIGHEST PRIORITY for this run. Where it conflicts "
+        "with the node instructions below, follow this; otherwise treat it as an "
+        "additional binding constraint.\n\n"
+        f"{operator_input}\n\n"
+        "--- node instructions ---\n\n"
+        f"{prompt}"
+    )
 
 
 def _trace_snapshot(run: dict) -> dict:

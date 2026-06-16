@@ -36,6 +36,29 @@ interface Flags {
   [key: string]: string | boolean | string[];
 }
 
+// Flags that always consume the following token as their value, even when that
+// value itself begins with `--` (e.g. operator `--input "--urgent ..."`). Without
+// this, a value starting with `--` is mistaken for the next flag and dropped.
+const VALUE_FLAGS = new Set([
+  "body",
+  "db",
+  "global-root",
+  "id",
+  "input",
+  "kind",
+  "markdown-file",
+  "node",
+  "origin",
+  "project",
+  "project-root",
+  "roots",
+  "run-file",
+  "spec-file",
+  "templates-root",
+  "title",
+  "workflow",
+]);
+
 function parseFlags(argv: string[]): Flags {
   const flags: Flags = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -43,7 +66,7 @@ function parseFlags(argv: string[]): Flags {
     if (token.startsWith("--")) {
       const key = token.slice(2);
       const next = argv[i + 1];
-      if (next === undefined || next.startsWith("--")) {
+      if (next === undefined || (next.startsWith("--") && !VALUE_FLAGS.has(key))) {
         flags[key] = true;
       } else {
         flags[key] = next;
@@ -134,6 +157,7 @@ async function dispatch(command: string | undefined, flags: Flags): Promise<unkn
         required(str(flags, "id"), "--id"),
         str(flags, "project"),
         str(flags, "origin"),
+        str(flags, "input"),
       );
     case "run-load":
       return cmdRunLoad(required(db, "--db"), required(str(flags, "id"), "--id"));
@@ -200,9 +224,16 @@ async function main(): Promise<number> {
   } catch (err) {
     // Structured so the Python bridge can map the error kind to an HTTP status
     // (e.g. NotFoundError -> 404, SpecValidationError -> 400). The message stays
-    // human-readable for non-parsing callers.
-    const e = err as Error;
-    process.stderr.write(`${JSON.stringify({ error: { name: e.name, message: e.message } })}\n`);
+    // human-readable for non-parsing callers. When the error carries structured
+    // sub-errors (a SpecValidationError's code+message list), pass them through
+    // as `details` so a surfacing UI can render each one.
+    const e = err as Error & { errors?: { code?: string; message?: string }[] };
+    const details = Array.isArray(e.errors)
+      ? e.errors.map((d) => ({ code: d.code, message: d.message }))
+      : undefined;
+    process.stderr.write(
+      `${JSON.stringify({ error: { name: e.name, message: e.message, ...(details ? { details } : {}) } })}\n`,
+    );
     return 1;
   }
 }

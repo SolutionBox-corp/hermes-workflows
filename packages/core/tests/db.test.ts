@@ -82,6 +82,26 @@ describe("RunRepository — runs", () => {
     expect(loaded?.nodes["done"]?.status).toBe("pending");
   });
 
+  test("round-trips a node's typed task_ids channel", () => {
+    const run = createRunState(workflow, "run-taskids");
+    run.status = "running";
+    run.nodes["a"] = {
+      node_id: "a",
+      status: "completed",
+      outcome: "success",
+      seq: 1,
+      task_ids: ["t_aaa", "t_bbb"],
+    };
+    repo.saveRun(run);
+    expect(repo.loadRun("run-taskids")?.nodes["a"]?.task_ids).toEqual(["t_aaa", "t_bbb"]);
+
+    // An empty/absent list persists as absent, not as [].
+    const bare = createRunState(workflow, "run-no-taskids");
+    bare.nodes["a"] = { node_id: "a", status: "completed", outcome: "success", seq: 1 };
+    repo.saveRun(bare);
+    expect(repo.loadRun("run-no-taskids")?.nodes["a"]?.task_ids).toBeUndefined();
+  });
+
   test("round-trips a run origin and notification markers", () => {
     const run = createRunState(workflow, "run-origin", undefined, "telegram:1:2");
     run.status = "running";
@@ -108,6 +128,24 @@ describe("RunRepository — runs", () => {
       "mem:run_completed",
       "failed",
     ]);
+  });
+
+  test("round-trips a run-level operator input", () => {
+    const run = createRunState(
+      workflow,
+      "run-input",
+      undefined,
+      undefined,
+      "scope = only X; be terse",
+    );
+    expect(run.input).toBe("scope = only X; be terse");
+    repo.saveRun(run);
+    expect(repo.loadRun("run-input")?.input).toBe("scope = only X; be terse");
+
+    // A run started without operator input loads with input absent.
+    const bare = createRunState(workflow, "run-noinput");
+    repo.saveRun(bare);
+    expect(repo.loadRun("run-noinput")?.input).toBeUndefined();
   });
 
   test("upserts on save and returns null for an unknown run", () => {

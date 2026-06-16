@@ -83,6 +83,33 @@ export interface NodeRunState {
    * card and the node settles on the post-review terminal state.
    */
   reviewed_task_ids?: string[];
+  /**
+   * Bookkeeping for a sequential `adopt` node (`sequential: true`): the cards not
+   * yet promoted (`pending`), the assignee to promote them under, and the
+   * accumulated `outputs` / `failed` flag from already-terminal cards. The poll
+   * loop promotes one card at a time and aggregates the final outcome from this.
+   */
+  adopt_seq?: {
+    pending: string[];
+    assignee: string;
+    outputs: string[];
+    failed: boolean;
+  };
+  /**
+   * Board task ids this node RESOLVED, captured from a structured `task_ids` block
+   * in its worker output at settle time (a fenced ```task_ids code block or a
+   * `<task_ids>` tag) - the chosen ids, isolated from any stray id-shaped token in
+   * its prose. An adopt node's `{{nodes.<id>.output.task_ids}}` reference reads
+   * this typed list in preference to shape-scraping the source node's prose.
+   */
+  task_ids?: string[];
+  /**
+   * Set by the bridge when a settled node must HARD-STOP the run rather than
+   * route onward (e.g. an adopt node that resolved zero cards to drive). The
+   * advance engine fails the run closed and does not follow this node's outgoing
+   * edges, so a failed adopt can never fall through to a downstream build/PR.
+   */
+  abort_run?: boolean;
   /** Set once the node reaches a terminal state. */
   outcome?: NodeOutcome;
   /** Decision recorded for a human_review node. */
@@ -116,6 +143,15 @@ export interface RunState {
   workflow_version: number;
   status: RunStatus;
   project_id?: string;
+  /**
+   * Free-form operator input supplied at run start (CLI `--input`, the
+   * `/workflow run` command, or the dashboard Play button). The engine layers it
+   * above EVERY agent_task node's prompt as the highest-priority block, so it
+   * overrides conflicting node instructions and otherwise binds as an additional
+   * constraint. Persisted so it applies to every node across ticks. Absent for a
+   * run started without operator input.
+   */
+  input?: string;
   /**
    * The chat the run originated from, an opaque `<platform>:<chat>[:<thread>]`
    * string Hermes' native delivery interprets. Captured for model-started runs

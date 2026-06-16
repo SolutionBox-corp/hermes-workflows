@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Background, Controls, ReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -8,14 +8,22 @@ import type { ModelGroup, NodeType, SpecDetail, WorkflowNode } from "../api/type
 import { useFlowEditor, type SaveStatus } from "./useFlowEditor";
 import { useRunPlayback, type PlaybackPhase } from "./useRunPlayback";
 import { NodeInspector } from "./NodeInspector";
+import { EdgeInspector } from "./EdgeInspector";
 import { ValidationPanel } from "./ValidationPanel";
 import { CompilePreview } from "./CompilePreview";
-import { nodeTypeLabel, type FlowNode } from "./graphMapping";
+import {
+  hoverEdge,
+  nodeTypeLabel,
+  type FlowEdge,
+  type FlowNode,
+  type WorkflowEdgeData,
+} from "./graphMapping";
 import { nodeTypeIcon } from "./nodeTypeIcons";
 import { NodeOpenProvider } from "./nodeOpenContext";
 import { CANVAS_NODE_TYPES } from "../run/canvasNodeTypes";
+import { CANVAS_EDGE_TYPES } from "./edges/canvasEdgeTypes";
 import { overlayRunStatus } from "../run/runView";
-import { Button, Menu, Modal, type MenuItem } from "../ui/components";
+import { Button, Menu, Modal, ToastHost, useToasts, type MenuItem } from "../ui/components";
 import { useHeaderSlots } from "../ui/PluginHeader";
 import {
   ArrowLeftIcon,
@@ -65,6 +73,33 @@ function statusLabel(status: SaveStatus, dirty: boolean): string {
   return "No changes";
 }
 
+// Surfaces a failed save as a prominent, dismissible toast (the inline bar
+// label is easy to miss). The message is the core's human-readable validation
+// reason - e.g. "incomplete_branch: node 'collect' branches on node_status but
+// covers neither outcome" - so the operator sees what and where without opening
+// the Validate panel. Rendered inside <ToastHost>, where useToasts() resolves.
+function SaveErrorToast({ status }: { status: SaveStatus }): null {
+  const toasts = useToasts();
+  const shownFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (status.kind !== "error") {
+      shownFor.current = null;
+      return;
+    }
+    if (shownFor.current === status.message) return; // same failure, one toast
+    shownFor.current = status.message;
+    toasts.add({
+      title: "Save failed",
+      description: status.message,
+      type: "save-error",
+      priority: "high",
+      timeout: 0, // an error stays until the operator dismisses it
+      data: { testId: "save-error-toast" },
+    });
+  }, [status, toasts]);
+  return null;
+}
+
 const PLAY_LABEL: Record<PlaybackPhase, string> = {
   attaching: "Play", // disabled until the mount active-run check lands
   idle: "Play",
@@ -87,7 +122,11 @@ export function FlowEditor({
   // a single click selects (enables Duplicate, highlights), a double click or a
   // fresh add opens the editor.
   const [editing, setEditing] = useState(false);
+  const [editingEdge, setEditingEdge] = useState(false);
   const [tool, setTool] = useState<Tool>(null);
+  // The edge the pointer is over, for the blue hover highlight + lift-above-
+  // nodes. Kept here (not in the edge model) so hover never dirties the graph.
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   // Profile/model option lists for the inspector selects (the user's Hermes
   // roster + configured models). Best-effort: empty on failure.
   const [profiles, setProfiles] = useState<string[]>([]);
@@ -188,6 +227,27 @@ export function FlowEditor({
     [ctrl],
   );
 
+  // Clicking an edge opens its inspector (set its branch condition / fallback).
+  const onEdgeClick = useCallback(
+    (_event: unknown, edge: FlowEdge) => {
+      ctrl.selectEdge(edge.id);
+      setEditingEdge(true);
+    },
+    [ctrl],
+  );
+
+  const handleEdgeChange = useCallback(
+    (data: WorkflowEdgeData) => {
+      if (ctrl.selectedEdge) ctrl.updateEdge(ctrl.selectedEdge.id, data);
+    },
+    [ctrl],
+  );
+
+  const closeEdgeEditor = useCallback(() => {
+    setEditingEdge(false);
+    ctrl.selectEdge(null);
+  }, [ctrl]);
+
   const onNodeDoubleClick = useCallback(
     (_event: unknown, node: FlowNode) => openNode(node.id),
     [openNode],
@@ -200,7 +260,9 @@ export function FlowEditor({
   const closeEditor = useCallback(() => setEditing(false), []);
   const onPaneClick = useCallback(() => {
     ctrl.selectNode(null);
+    ctrl.selectEdge(null);
     setEditing(false);
+    setEditingEdge(false);
   }, [ctrl]);
 
   // While a run plays the canvas renders the run pipeline: the same nodes at
@@ -208,13 +270,45 @@ export function FlowEditor({
   // Each run node carries `onSelect` so the operator can open it in a read-only
   // inspector mid-run (pure inspection; editing stays locked) - ReactFlow does
   // not pass React context into custom nodes, so the opener rides on node data.
-  const canvasNodes =
+  // Which source handles each node uses (by an outgoing edge), so a node always
+  // renders the handles its edges leave from - keeping conditioned/fallback/plain
+  // edges anchored even when they are not in the default success/failure pair.
+  const usedHandlesByNode = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const edge of ctrl.edges) {
+      (map[edge.source] ??= []).push(edge.sourceHandle ?? "out");
+    }
+    return map;
+  }, [ctrl.edges]);
+
+  const canvasNodes = (
     playing && playback.run !== null
       ? overlayRunStatus(ctrl.nodes, playback.run).map((node) => ({
           ...node,
           data: { ...node.data, onSelect: openNode },
         }))
-      : ctrl.nodes;
+      : ctrl.nodes
+  ).map((node) => ({
+    ...node,
+    data: {
+      ...node.data,
+      usedHandles: usedHandlesByNode[node.id] ?? [],
+      // The "+" add-branch affordance is editor-only; a playing run is read-only.
+      branchEditable: !playing,
+    },
+  }));
+
+  // Render-time hover overlay: the pointed-at edge turns blue and lifts above
+  // the nodes layer, leaving the persisted edge model (ctrl.edges) untouched.
+  const canvasEdges = useMemo(
+    () => hoverEdge(ctrl.edges, hoveredEdgeId),
+    [ctrl.edges, hoveredEdgeId],
+  );
+  const onEdgeMouseEnter = useCallback(
+    (_event: unknown, edge: FlowEdge) => setHoveredEdgeId(edge.id),
+    [],
+  );
+  const onEdgeMouseLeave = useCallback(() => setHoveredEdgeId(null), []);
 
   const addItems: MenuItem[] = NODE_TYPES.map((type) => ({
     key: type,
@@ -299,7 +393,8 @@ export function FlowEditor({
   );
 
   return (
-    <>
+    <ToastHost>
+      <SaveErrorToast status={ctrl.status} />
       {slots ? (
         <>
           {slots.leftHost ? createPortal(title, slots.leftHost) : null}
@@ -318,8 +413,9 @@ export function FlowEditor({
             <NodeOpenProvider value={openNode}>
               <ReactFlow
                 nodes={canvasNodes}
-                edges={ctrl.edges}
+                edges={canvasEdges}
                 nodeTypes={CANVAS_NODE_TYPES}
+                edgeTypes={CANVAS_EDGE_TYPES}
                 nodesDraggable={!playing}
                 nodesConnectable={!playing}
                 elementsSelectable={!playing}
@@ -329,6 +425,9 @@ export function FlowEditor({
                 onMoveEnd={ctrl.onMoveEnd}
                 onNodeClick={playing ? undefined : onNodeClick}
                 onNodeDoubleClick={playing ? undefined : onNodeDoubleClick}
+                onEdgeClick={playing ? undefined : onEdgeClick}
+                onEdgeMouseEnter={onEdgeMouseEnter}
+                onEdgeMouseLeave={onEdgeMouseLeave}
                 onPaneClick={playing ? undefined : onPaneClick}
                 defaultViewport={ctrl.viewport}
                 fitView={ctrl.viewport === undefined}
@@ -368,6 +467,44 @@ export function FlowEditor({
         </Modal>
       )}
 
+      {editingEdge && ctrl.selectedEdge !== null && (
+        <Modal
+          title="Edge condition"
+          ariaLabel="Edit edge condition"
+          className="hw-node-modal"
+          onClose={closeEdgeEditor}
+          footer={
+            <>
+              {!playing && (
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    ctrl.removeEdge(ctrl.selectedEdge!.id);
+                    closeEdgeEditor();
+                  }}
+                >
+                  Delete edge
+                </Button>
+              )}
+              <Button variant="primary" onClick={closeEdgeEditor}>
+                {playing ? "Close" : "Done"}
+              </Button>
+            </>
+          }
+        >
+          <EdgeInspector
+            edge={ctrl.selectedEdge}
+            sourceType={
+              ctrl.nodes.find((n) => n.id === ctrl.selectedEdge!.source)?.data.node.type ??
+              "agent_task"
+            }
+            nodeIds={ctrl.nodes.map((n) => n.id)}
+            onChange={handleEdgeChange}
+            readOnly={playing}
+          />
+        </Modal>
+      )}
+
       {tool === "validate" && (
         <Modal title="Validation" onClose={() => setTool(null)}>
           <ValidationPanel workflowId={detail.workflow.id} client={api} />
@@ -378,6 +515,6 @@ export function FlowEditor({
           <CompilePreview workflowId={detail.workflow.id} client={api} />
         </Modal>
       )}
-    </>
+    </ToastHost>
   );
 }

@@ -53,6 +53,25 @@ export interface AgentTaskNode {
    * with `adopt`. Absent leaves the driven card settling on first `done`.
    */
   review_profile?: string;
+  /**
+   * For a multi-card `adopt` node: drive the referenced cards ONE AT A TIME
+   * instead of promoting them all into the dispatch lane at once. Promote card
+   * N, wait until it is terminal (incl. its review stage), then promote N+1, so
+   * each worker builds on the prior cards' committed work on a shared branch.
+   * The node still settles when all are terminal (failure if any failed).
+   * Default (absent/false) keeps the concurrent behavior. Only meaningful with
+   * `adopt`; a no-op for a single-card adopt.
+   */
+  sequential?: boolean;
+  /**
+   * Per-node control over the native per-card completion notification: when this
+   * node's Kanban card settles, whether the run origin is subscribed to its
+   * terminal event (the "done" ping). Unset inherits the workflow-level default
+   * (`notifications.subscribe_cards`, itself defaulting true); `true`/`false`
+   * override it for this node only. Lets an operator have some nodes ping and
+   * others stay quiet without changing the workflow default.
+   */
+  notify_completion?: boolean;
 }
 
 /**

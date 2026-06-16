@@ -296,6 +296,23 @@
   min-height: 44px;
   border-bottom: 1px solid var(--color-border, #2a2a2a);
 }
+.hw-pluginbar__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: none;
+  padding-right: 4px;
+}
+.hw-pluginbar__brand-name {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text, #e6edf3);
+}
+.hw-pluginbar__version {
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted, #8b949e);
+}
 .hw-pluginbar__left {
   display: flex;
   align-items: center;
@@ -515,6 +532,56 @@ a.hw-o2b:focus-visible {
 .hw-canvas {
   flex: 1;
   min-height: 0;
+  /* Anchor for the floating run-log panel. */
+  position: relative;
+}
+
+/* Floating, collapsible run-log panel: a curated, timestamped narrative of the
+   run, over the canvas bottom-right (not in the page header). */
+.hw-runlog {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  max-width: 320px;
+  border: 1px solid var(--color-border, #3a3a3a);
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-card, #1d1d1d);
+  color: var(--color-card-foreground, var(--color-foreground, #ededed));
+  box-shadow: 0 4px 16px rgb(0 0 0 / 35%);
+  font-size: 12px;
+  overflow: hidden;
+}
+.hw-runlog__toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  background: var(--color-muted, #262626);
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hw-runlog__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 10px;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hw-runlog__item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.hw-runlog__time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted-foreground, #9a9a9a);
 }
 
 /* ReactFlow canvas chrome themed with Hermes tokens — the library ships a light
@@ -1017,4 +1084,175 @@ a.hw-o2b:focus-visible {
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--color-muted-foreground, #9a9a9a);
+}
+
+/* --- Conditional branching: labeled source handles + colored edges --------- */
+
+/* A node's outgoing branch points are anchored on its right EDGE (ReactFlow's
+   default for a Right handle) and spread vertically. They are unlabeled - the
+   dot's color carries the meaning - and absolutely positioned, so they never
+   push or resize the node's content. */
+.hw-node {
+  position: relative;
+}
+.hw-handle.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-border, #6b7280);
+  border: 1px solid var(--color-card, #1d1d1d);
+}
+/* Only success/failure are color-coded; every other branch point keeps the
+   neutral default dot. */
+.hw-handle--success {
+  background: #2ea44f;
+}
+.hw-handle--failure {
+  background: var(--color-destructive, #c0392b);
+}
+/* The add-branch ("+") affordance: revealed on node hover, nested in the
+   bottom-right corner with the node's own corner radius, the glyph centered.
+   Adds the next unused outcome handle; disabled when all are shown. */
+.hw-node__add-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--color-border, #3a3a3a);
+  border-radius: 0 0 var(--radius-md, 6px) 0;
+  background: var(--color-muted, #262626);
+  color: var(--color-foreground, #ededed);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.hw-node:hover .hw-node__add-handle {
+  opacity: 1;
+}
+.hw-node:hover .hw-node__add-handle:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Edge stroke tone by branch meaning; a plain edge keeps the ReactFlow default. */
+.hw-edge--success {
+  stroke: #2ea44f;
+}
+.hw-edge--failure {
+  stroke: var(--color-destructive, #c0392b);
+}
+.hw-edge--review {
+  stroke: var(--color-warning, #d6b25e);
+}
+.hw-edge--else {
+  stroke: var(--color-muted-foreground, #9a9a9a);
+}
+.hw-edge.is-selected {
+  stroke-width: 3;
+}
+/* Hover: a clear blue highlight, distinct from the resting branch tones. The
+ * hovered edge is also lifted above nodes (its zIndex is raised in JS - the SVG
+ * edge layer cannot be CSS-stacked above the HTML node layer). Two classes beat
+ * the single-class branch tones on specificity, so no !important is needed. */
+.hw-edge.is-hovered {
+  stroke: #4493f8;
+  stroke-width: 3;
+}
+
+/* The branch-cause label chip on a conditioned edge. */
+.hw-edge-label {
+  position: absolute;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  pointer-events: all;
+  background: var(--color-card, #1d1d1d);
+  border: 1px solid var(--color-border, #3a3a3a);
+  color: var(--color-muted-foreground, #9a9a9a);
+}
+.hw-edge-label--success {
+  color: #2ea44f;
+  border-color: #2ea44f;
+}
+.hw-edge-label--failure {
+  color: var(--color-destructive, #c0392b);
+  border-color: var(--color-destructive, #c0392b);
+}
+.hw-edge-label--review {
+  color: var(--color-warning, #d6b25e);
+  border-color: var(--color-warning, #d6b25e);
+}
+.hw-edge-label--else {
+  font-style: italic;
+}
+
+/* Toast notifications (Base UI Toast parts, wrapped in ui/components/Toast).
+ * A fixed viewport at the bottom-right stacks dismissible cards; the save-error
+ * variant uses the destructive accent so a failed save cannot be missed. */
+.hw-toast-viewport {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, calc(100vw - 32px));
+  outline: none;
+}
+.hw-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-card, #1d1d1d);
+  border: 1px solid var(--color-border, #3a3a3a);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 35%);
+  color: var(--color-foreground, #e6edf3);
+}
+.hw-toast--save-error {
+  border-color: var(--color-destructive, #c0392b);
+}
+.hw-toast__body {
+  flex: 1;
+  min-width: 0;
+}
+.hw-toast__title {
+  font-weight: 600;
+  font-size: 13px;
+  margin: 0 0 2px;
+}
+.hw-toast--save-error .hw-toast__title {
+  color: var(--color-destructive, #c0392b);
+}
+.hw-toast__description {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-muted-foreground, #9a9a9a);
+  overflow-wrap: anywhere;
+}
+.hw-toast__close {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--color-muted-foreground, #9a9a9a);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.hw-toast__close:hover {
+  color: var(--color-foreground, #e6edf3);
 }

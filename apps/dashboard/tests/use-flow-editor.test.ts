@@ -63,6 +63,69 @@ describe("useFlowEditor", () => {
     expect(result.current.edges).toHaveLength(2);
   });
 
+  it("connecting from a labeled handle conditions the new edge", () => {
+    const { result } = renderHook(() => useFlowEditor(detail, stubClient()));
+    act(() =>
+      result.current.onConnect({
+        source: "build",
+        target: "done",
+        sourceHandle: "failure",
+        targetHandle: null,
+      }),
+    );
+    // A second edge build->done, from a different (failure) handle, is added
+    // alongside the pre-existing plain one.
+    const edge = result.current.edges.find((e) => e.sourceHandle === "failure");
+    expect(edge?.data?.condition).toEqual({
+      type: "node_status",
+      node: "build",
+      equals: "failure",
+    });
+  });
+
+  it("updateEdge sets the branch and repositions it onto the encoding handle", () => {
+    const { result } = renderHook(() => useFlowEditor(detail, stubClient()));
+    const edgeId = result.current.edges[0]!.id;
+    act(() => result.current.updateEdge(edgeId, { fallback: true }));
+    // The id encodes the handle, so re-handling regenerates it; find by source.
+    const edge = result.current.edges.find((e) => e.source === "build");
+    expect(edge?.data).toEqual({ fallback: true });
+    expect(edge?.sourceHandle).toBe("else");
+    expect(result.current.dirty).toBe(true);
+  });
+
+  it("updateEdge resyncs the edge id so a re-handled edge cannot collide", () => {
+    const { result } = renderHook(() => useFlowEditor(detail, stubClient()));
+    // Move the existing plain build->done edge onto the `else` handle.
+    const original = result.current.edges[0]!;
+    act(() => result.current.updateEdge(original.id, { fallback: true }));
+    const moved = result.current.edges.find((e) => e.source === "build")!;
+    expect(moved.id).not.toBe(original.id); // id followed the handle change
+    // Now draw a fresh plain (out) edge build->done: it must not reuse the moved
+    // edge's id, so ids stay unique and select/remove stays unambiguous.
+    act(() =>
+      result.current.onConnect({
+        source: "build",
+        target: "done",
+        sourceHandle: "out",
+        targetHandle: null,
+      }),
+    );
+    const ids = result.current.edges.map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("removeEdge deletes the edge and clears its selection", () => {
+    const { result } = renderHook(() => useFlowEditor(detail, stubClient()));
+    const edgeId = result.current.edges[0]!.id;
+    act(() => result.current.selectEdge(edgeId));
+    expect(result.current.selectedEdge?.id).toBe(edgeId);
+    act(() => result.current.removeEdge(edgeId));
+    expect(result.current.edges).toHaveLength(0);
+    expect(result.current.selectedEdge).toBeNull();
+    expect(result.current.dirty).toBe(true);
+  });
+
   it("marks dirty on a node move but not on measurement or selection", () => {
     const { result } = renderHook(() => useFlowEditor(detail, stubClient()));
 

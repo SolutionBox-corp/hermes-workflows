@@ -4,6 +4,106 @@ All notable changes to Hermes Workflows are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0 - 2026-06-15
+
+Operator control and run resilience: a free-form run input that overrides node
+prompts at the highest priority, an opt-in sequential mode for driving shared-
+branch cards one at a time, a bounded wait that fails a stuck adopt node instead
+of polling forever, and the plugin version shown in the dashboard header.
+
+### Added
+
+- **Run-level operator input.** `hermes-workflows run <id> --input "<prompt>"`
+  (and `/workflow run <id> --input ...`) layers a free-form instruction above
+  every `agent_task` node's prompt at the highest priority: it overrides
+  conflicting node instructions and otherwise binds as an additional constraint.
+  Persisted on the run, applied to every node across ticks, shown read-only in
+  the run inspector.
+- **Sequential adopt mode.** An `adopt` node with `sequential: true` drives its
+  referenced cards one at a time (promote, run to terminal including review,
+  then the next), so workers build on prior committed work on a shared branch.
+  Default stays concurrent.
+- **Plugin version and build number in the header.** The dashboard top bar shows
+  the current plugin version plus a monotonic build counter as `vX.Y.Z-bN` (e.g.
+  `v0.3.0-b1`); the counter lives in `apps/dashboard/build-number.json`, is bumped
+  per committed dashboard build, and resets to 0 on release.
+- **Conditional branching in the editor.** Each non-terminal node exposes labeled
+  source handles per outcome (success/failure, approved/rejected/needs_changes,
+  plus "else" and a plain "always"); the handle an edge leaves from encodes its
+  condition, so a branch is authorable by dragging and visible at a glance. A
+  custom edge type colors and labels a conditioned edge, an edge inspector sets or
+  clears the branch (including branching on another node's status), and the
+  `condition` node finally has a usable inspector.
+- **Per-node completion-notification toggle.** An `agent_task` node can opt its
+  card's "done" ping in or out (`notify_completion`) independently of the
+  workflow-level `subscribe_cards` default; surfaced as a tri-state control in the
+  node inspector.
+- **`/workflow` natural-language entry.** Free text after `/workflow` that is not
+  an explicit subcommand resolves to a workflow id and the operator instruction
+  (the run input), or asks a short clarifying question when the target is
+  ambiguous or unknown.
+- **Floating run-log panel.** The running-workflow page shows a collapsible,
+  timestamped, curated history of the run (started with the operator input, nodes
+  completed/failed, gates entered and resolved, terminal outcome) over the canvas,
+  filtered to user-facing events only.
+- **Save-failure toast.** A workflow that fails server-side validation on save now
+  raises a prominent, dismissible toast naming the offending node(s) and the
+  human-readable reason (e.g. "a node branches on node_status but covers neither
+  outcome"), instead of only a small inline status label built from bare error
+  codes. Validation stays server-authoritative.
+- **Edge hover highlight.** Hovering a connection in the editor turns it blue and
+  lifts it above the nodes, so a single edge is followable end to end in a dense
+  graph; mouse-out restores its branch color and stacking.
+
+### Changed
+
+- An `adopt` node now bounds its wait: a driven card the dispatcher cannot make
+  progress on (a climbing consecutive-failure count while it sits un-run, including
+  an unspawnable reviewer profile) settles the node failure with a clear reason and
+  an operator notice, instead of polling it forever.
+- A chat reply to a uniquely-waiting gate now accepts a bare pick (a number,
+  "scope 3", or a scope name) as approval with the reply text as the note, not only
+  the literal `approved`/`rejected`/`needs_changes` tokens. The operator input is
+  no longer shown as a page-header string; it appears as the first run-log entry.
+- Waiting for a PR merge is handled by the worker-free `wait` node
+  (`wait_for: { github_pr_merged: ... }`), polled in the engine tick with no Kanban
+  card. A release PR left open for hours therefore never accrues dispatcher
+  failures or auto-blocks while it waits, and the run proceeds on merge with no
+  manual unblock - the stall seen when a merge-wait was modeled as an `agent_task`
+  that reported failure to "keep waiting". Now regression-guarded.
+
+### Fixed
+
+- `bin/hermes-workflows` no longer claims a `~/.hermes/bin` symlink that is not
+  created; the header and docs describe the actual resolution (optional installed
+  symlink, falling back to the in-repo wrapper).
+- An `adopt` node drives board cards from a typed `task_ids` channel captured from a
+  structured ```` ```task_ids ```` block (or `<task_ids>` tag) in the resolving node's
+  worker output - the chosen ids, isolated from any stray `t_`-shaped token in its
+  prose - rather than shape-scraping free text or input values (which grabbed wrong
+  ids and could not isolate the chosen scope). A bare shape-scrape remains only a
+  last-resort fallback. An adopt that resolves zero ids now fails the run closed
+  instead of falling through to a downstream build/PR with an empty branch.
+- A global (`direct`) `agent_task` node no longer hangs `started`-but-unsettled
+  when the short-lived advancing process (a CLI `run` or the cron `advance-all`
+  tick) exits. The agent ran in a daemon thread of that process and died with it,
+  orphaning the worker and stranding the node; it now runs in a detached process
+  that outlives the scheduler and writes its own settled completion. Cron-triggered
+  global workflows are covered. The detached worker also settles a failure when its
+  own spec file is missing or corrupt, so a bad launch can never strand the node.
+- A hard run abort (an adopt that drove zero cards, or a sequential adopt that
+  cannot promote its next card) now closes the run failed even when another node
+  is still active or waiting in a parallel branch, instead of being masked by the
+  active node. A sequential adopt whose next-card promotion errors fails closed
+  rather than wedging the tick.
+- A chat gate reply that is a capitalized decision token (e.g. `Rejected fix the
+  lint`) is now matched case-insensitively as that decision, instead of slipping
+  past the token check and being auto-approved as a bare pick.
+- The CLI preserves a free-form `--input` value that itself begins with `--`,
+  rather than mistaking it for the next flag and dropping the operator prompt.
+- `read_completion` feature-detects the board's `consecutive_failures` column, so
+  polling still works against an older Kanban schema that lacks it.
+
 ## 0.2.0 - 2026-06-15
 
 A visual overhaul of the dashboard plugin on a shared component kit, richer
