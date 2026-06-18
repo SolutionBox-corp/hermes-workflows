@@ -797,6 +797,10 @@ class Engine:
         effective = node_pref if node_pref is not None else subscribe_cards
         if not effective:
             return
+        # An off-board node has no card to subscribe (it ran via the direct
+        # runner), so there is nothing to ping on - skip it.
+        if params and params.get("off_board"):
+            return
         origin = run.get("origin")
         if not origin or (params and params.get("kind") == "script"):
             return
@@ -820,8 +824,16 @@ class Engine:
         # Script nodes run locally in any scope: wrap the scope executor so the
         # composite routes script steps to the script backend by kind, leaving
         # the single-executor advance loop otherwise unchanged.
-        if self.script is not None:
-            return CompositeExecutor(scope=base, script=self.script)
+        # Wrap in a composite whenever EITHER a script backend or a direct
+        # backend exists: script nodes route to the script executor, and
+        # `board: false` nodes route off-board to `direct`. Gating only on
+        # `script` would silently send off-board tasks back to the board (a card)
+        # in a kanban+direct setup with no script backend.
+        if self.script is not None or self.direct is not None:
+            # With no script backend, route `kind == script` to the scope
+            # executor (the prior behaviour) rather than dropping it.
+            script_target = self.script if self.script is not None else base
+            return CompositeExecutor(scope=base, script=script_target, direct=self.direct)
         return base
 
     def _scope_executor(self, scope: dict, run: dict) -> NodeExecutor:
@@ -855,6 +867,13 @@ class Engine:
                 for nid, node in run["nodes"].items()
             }
             prompt = resolve_input_mapping(prompt, mapping, channels)
+        # A Prompt node feeding this task (an edge ``prompt -> agent_task``)
+        # contributes its authored text as the node's PRIMARY instruction,
+        # layered above the node's own prompt - the same mechanism as the
+        # operator input, sourced from a graph node instead of the CLI.
+        node_prompt = params.get("node_prompt")
+        if node_prompt:
+            prompt = _layer_node_prompt(prompt, node_prompt)
         # The run-level operator input (if any) is layered ABOVE every agent_task
         # node's prompt as the highest-priority block: it overrides conflicting
         # node instructions and otherwise binds as an additional constraint.
@@ -1119,6 +1138,32 @@ def _run_result_output(run: dict) -> Optional[str]:
         if best_seq is None or seq >= best_seq:
             best, best_seq = node["output"], seq
     return best
+
+
+def _layer_node_prompt(prompt: str, node_prompt: str) -> str:
+    """Layer a Prompt node's authored text above an agent_task's own prompt as
+    the operator's run directive. The directive has the highest authority over
+    every DECISION the step makes (what to select, the scope, the version,
+    whether to release, ...), but it is carried out THROUGH this step's own task,
+    never instead of it: the directive must not make a step overstep its role -
+    a read-only step stays read-only, a step does not take over another step's
+    work or create artifacts outside its stated scope. This keeps the authored
+    Prompt the priority instruction without letting it short-circuit the graph.
+    When the step has no own prompt the directive becomes the whole instruction."""
+    if not prompt.strip():
+        return node_prompt
+    return (
+        "OPERATOR DIRECTIVE for this run (highest authority). It governs every "
+        "decision you make in this step - what to select, the scope, the version, "
+        "whether to release, and so on:\n\n"
+        f"{node_prompt}\n\n"
+        "Carry out this directive ONLY through this step's own task described "
+        "below. Do NOT take over another step's work, create or modify anything "
+        "outside this step's stated scope, or break this step's constraints - a "
+        "read-only step stays read-only. Honour the directive within your role.\n\n"
+        "--- this step's task ---\n\n"
+        f"{prompt}"
+    )
 
 
 def _layer_operator_input(prompt: str, operator_input: str) -> str:

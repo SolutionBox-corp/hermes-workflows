@@ -215,7 +215,37 @@ export function NodeInspector({
               }
             />
           </Field>
+          <fieldset className="hw-fieldset">
+            <legend>Board</legend>
+            <Checkbox
+              checked={wf.board !== false}
+              disabled={readOnly}
+              onCheckedChange={(on) => onChange({ board: on ? undefined : false })}
+            >
+              Run on the project board
+            </Checkbox>
+            <p className="hw-note">
+              On by default: the node runs as a Kanban card. Turn off to run an
+              internal orchestration step off the board (no card, no worktree),
+              so the operator board keeps only the real work.
+            </p>
+          </fieldset>
         </>
+      )}
+
+      {wf.type === "prompt" && (
+        <Field label="Prompt">
+          <Textarea
+            className="hw-textarea--tall"
+            aria-label="Prompt"
+            value={wf.prompt ?? ""}
+            onChange={(e) => onChange({ prompt: e.target.value || undefined })}
+          />
+          <p className="hw-note">
+            Layered above the prompt of each agent task this node connects to, as the primary
+            instruction. Optional.
+          </p>
+        </Field>
       )}
 
       {wf.type === "script" && (

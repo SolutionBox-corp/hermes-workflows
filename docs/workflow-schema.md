@@ -127,7 +127,17 @@ deep-link resolution are host surfaces pending upstream Hermes support.
       Implement the feature according to the plan.
     max_retries: 1
     timeout_seconds: 3600
+    board: true                   # default; set false to run off the board
   ```
+  By default a project-scope agent_task creates a Kanban card the worker pool
+  drives. Set `board: false` to run the node **off the board** through the direct
+  profile runner: no card is created, so internal orchestration steps do not
+  clutter the operator's board - reserve real cards for the actual work (an
+  `adopt` node driving an existing card, or an epic card the run itself opens).
+  An off-board node runs without a project worktree, so it is for
+  reasoning/orchestration steps, not for nodes that must commit to the repo. In
+  `global` scope it is a no-op (every node already runs through the direct
+  runner).
   An agent_task can instead **drive an existing board card** rather than create
   one — the native Kanban flow where the work is the card:
   ```yaml
@@ -154,6 +164,25 @@ deep-link resolution are host surfaces pending upstream Hermes support.
   ```
   Running a workflow with script nodes requires `execution.scripts_enabled` and
   exposes only `execution.script_env_allowlist` vars — see `execution.md`.
+- **prompt** — a block of authored text with one input and one output, and no
+  work of its own. Its text becomes the operator directive for every agent_task
+  reachable DOWNSTREAM of it (a transitive walk over the edges), so a Prompt node
+  governs the whole sub-flow from its insertion point, not just its immediate
+  successor. The directive holds the highest authority over each step's decisions
+  (what to select, the scope, the version, whether to release) but is carried out
+  only through that step's own role - a read-only step stays read-only and no
+  step takes over another's work - the same layering the run `--input` applies
+  (see `execution.md`), packaged as a graph node. Routing-only: it resolves
+  instantly and follows its edge, creating no Kanban card and running no worker.
+  The text is optional; several Prompt nodes feeding one task join in
+  node-declaration order.
+  ```yaml
+  - id: brief
+    type: prompt
+    prompt: "Ship the urgent fix first; keep the change minimal."
+  ```
+  When a downstream agent_task's own prompt is empty the Prompt node text becomes
+  the whole instruction; a run `--input`, when set, still sits above it.
 - **condition** — a routing-only node; its outgoing edges carry the conditions.
 - **human_review** — pauses the run; `options: [approved, rejected, needs_changes]`.
   The resolution may carry an optional operator note, consumable downstream as

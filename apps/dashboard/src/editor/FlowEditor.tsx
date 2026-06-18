@@ -23,7 +23,18 @@ import { NodeOpenProvider } from "./nodeOpenContext";
 import { CANVAS_NODE_TYPES } from "../run/canvasNodeTypes";
 import { CANVAS_EDGE_TYPES } from "./edges/canvasEdgeTypes";
 import { overlayRunStatus } from "../run/runView";
-import { Button, Menu, Modal, ToastHost, useToasts, type MenuItem } from "../ui/components";
+import { RunLogPanel } from "../run/RunLogPanel";
+import { deriveRunLogEvents, mergeRunLog, type LoggedRunEvent } from "../run/runLog";
+import {
+  Button,
+  Field,
+  Menu,
+  Modal,
+  Textarea,
+  ToastHost,
+  useToasts,
+  type MenuItem,
+} from "../ui/components";
 import { useHeaderSlots } from "../ui/PluginHeader";
 import {
   ArrowLeftIcon,
@@ -31,6 +42,7 @@ import {
   FileIcon,
   LayoutIcon,
   PlayIcon,
+  PromptIcon,
   PlusIcon,
   SaveIcon,
   ShieldCheckIcon,
@@ -55,6 +67,7 @@ export interface FlowEditorProps {
 // the picker and a placed node stay visually consistent with no duplicate list.
 const NODE_TYPES: NodeType[] = [
   "agent_task",
+  "prompt",
   "script",
   "condition",
   "human_review",
@@ -64,14 +77,6 @@ const NODE_TYPES: NodeType[] = [
 
 /** Which header-tool panel is open in a modal, if any. */
 type Tool = "validate" | "compile" | null;
-
-function statusLabel(status: SaveStatus, dirty: boolean): string {
-  if (status.kind === "saving") return "Saving…";
-  if (status.kind === "error") return `Save failed: ${status.message}`;
-  if (dirty) return "Unsaved changes";
-  if (status.kind === "saved") return "Saved";
-  return "No changes";
-}
 
 // Surfaces a failed save as a prominent, dismissible toast (the inline bar
 // label is easy to miss). The message is the core's human-readable validation
@@ -97,6 +102,38 @@ function SaveErrorToast({ status }: { status: SaveStatus }): null {
       data: { testId: "save-error-toast" },
     });
   }, [status, toasts]);
+  return null;
+}
+
+// Surfaces a run start / poll / attach failure as a toast - the editor header
+// no longer carries an inline error. The toast is closed when the error clears
+// (a self-healing poll failure disappears on the next good poll) and replaced
+// when a different message arrives, so at most one run-error toast is shown.
+function PlaybackErrorToast({ error }: { error: string | null }): null {
+  const toasts = useToasts();
+  const idRef = useRef<string | null>(null);
+  const shownFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (error === null) {
+      if (idRef.current !== null) {
+        toasts.close(idRef.current);
+        idRef.current = null;
+      }
+      shownFor.current = null;
+      return;
+    }
+    if (shownFor.current === error) return; // same message, one toast
+    shownFor.current = error;
+    if (idRef.current !== null) toasts.close(idRef.current);
+    idRef.current = toasts.add({
+      title: "Run error",
+      description: error,
+      type: "error",
+      priority: "high",
+      timeout: 0, // an error stays until it self-heals or the operator dismisses it
+      data: { testId: "playback-error-toast" },
+    });
+  }, [error, toasts]);
   return null;
 }
 
@@ -127,6 +164,12 @@ export function FlowEditor({
   // The edge the pointer is over, for the blue hover highlight + lift-above-
   // nodes. Kept here (not in the edge model) so hover never dirties the graph.
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  // The optional run-wide operator directive and the modal that captures it.
+  // Layered above every agent_task prompt at highest priority for the run it
+  // starts (the same directive the `/workflow run --input` CLI supplies); the
+  // plain Play button starts with no input.
+  const [runInputOpen, setRunInputOpen] = useState(false);
+  const [runInput, setRunInput] = useState("");
   // Profile/model option lists for the inspector selects (the user's Hermes
   // roster + configured models). Best-effort: empty on failure.
   const [profiles, setProfiles] = useState<string[]>([]);
@@ -183,6 +226,19 @@ export function FlowEditor({
   // not lock the canvas, it only holds the Play button.
   const playing = playback.phase === "starting" || playback.phase === "playing";
 
+  // The curated, timestamped run log - the same panel the Runs inspector shows -
+  // surfaces during playback, derived from the polled run state. Reset when the
+  // playing run changes so a new run does not inherit the prior run's entries.
+  const playbackRun = playback.run;
+  const [runLog, setRunLog] = useState<LoggedRunEvent[]>([]);
+  useEffect(() => {
+    setRunLog([]);
+  }, [playbackRun?.run_id]);
+  useEffect(() => {
+    if (playbackRun === null) return;
+    setRunLog((prev) => mergeRunLog(prev, deriveRunLogEvents(playbackRun), Date.now()));
+  }, [playbackRun]);
+
   const openNode = useCallback(
     (id: string) => {
       ctrl.selectNode(id);
@@ -196,16 +252,26 @@ export function FlowEditor({
     if (saved) onSaved?.(saved);
   }, [ctrl, onSaved]);
 
-  const handlePlay = useCallback(async () => {
-    // Run what the operator sees: a dirty graph is saved first, and a failed
-    // save (already shown in the status label) aborts the start.
-    if (ctrl.dirty) {
-      const saved = await ctrl.save();
-      if (saved === null) return;
-      onSaved?.(saved);
-    }
-    playback.play();
-  }, [ctrl, playback, onSaved]);
+  const handlePlay = useCallback(
+    async (input?: string) => {
+      // Run what the operator sees: a dirty graph is saved first, and a failed
+      // save (already shown in the status label) aborts the start.
+      if (ctrl.dirty) {
+        const saved = await ctrl.save();
+        if (saved === null) return;
+        onSaved?.(saved);
+      }
+      playback.play(input);
+    },
+    [ctrl, playback, onSaved],
+  );
+
+  // Start from the run-input modal: carry the typed directive into the run,
+  // then close the modal. The text is kept so a refused start can be retried.
+  const handleRunWithInput = useCallback(() => {
+    setRunInputOpen(false);
+    void handlePlay(runInput);
+  }, [handlePlay, runInput]);
 
   const handleInspectorChange = useCallback(
     (patch: Partial<WorkflowNode>) => {
@@ -334,17 +400,29 @@ export function FlowEditor({
   const actions = (
     <>
       {onOpenRun !== undefined && (
-        <Button
-          variant="primary"
-          // Held while the mount attach check runs (phase "attaching"), while
-          // a run is underway, and while the pre-play save is in flight (so a
-          // rapid double-click cannot queue a second save).
-          disabled={playback.phase !== "idle" || ctrl.status.kind === "saving"}
-          onClick={handlePlay}
-        >
-          <PlayIcon />
-          {PLAY_LABEL[playback.phase]}
-        </Button>
+        <>
+          <Button
+            variant="primary"
+            // Held while the mount attach check runs (phase "attaching"), while
+            // a run is underway, and while the pre-play save is in flight (so a
+            // rapid double-click cannot queue a second save).
+            disabled={playback.phase !== "idle" || ctrl.status.kind === "saving"}
+            // Bare start: no operator input. The () wrapper drops the click
+            // event so it is never mistaken for the input directive.
+            onClick={() => void handlePlay()}
+          >
+            <PlayIcon />
+            {PLAY_LABEL[playback.phase]}
+          </Button>
+          <Button
+            aria-label="Run input"
+            title="Run with an operator directive"
+            disabled={playback.phase !== "idle" || ctrl.status.kind === "saving"}
+            onClick={() => setRunInputOpen(true)}
+          >
+            <PromptIcon />
+          </Button>
+        </>
       )}
       <Menu
         label={
@@ -381,20 +459,13 @@ export function FlowEditor({
         items={toolItems}
         disabled={playing}
       />
-      {playback.error !== null && (
-        <span role="alert" className="hw-bar-status hw-error">
-          {playback.error}
-        </span>
-      )}
-      <span role="status" className="hw-bar-status">
-        {statusLabel(ctrl.status, ctrl.dirty)}
-      </span>
     </>
   );
 
   return (
     <ToastHost>
       <SaveErrorToast status={ctrl.status} />
+      <PlaybackErrorToast error={playback.error} />
       {slots ? (
         <>
           {slots.leftHost ? createPortal(title, slots.leftHost) : null}
@@ -418,13 +489,24 @@ export function FlowEditor({
                 edgeTypes={CANVAS_EDGE_TYPES}
                 nodesDraggable={!playing}
                 nodesConnectable={!playing}
-                elementsSelectable={!playing}
+                // Nodes stay selectable while a run plays: ReactFlow gates a
+                // node's pointer-events on selectable|draggable|onClick|mouse*,
+                // so a non-selectable node with no click handler is inert - the
+                // double-click and the open affordance never reach it. Editing
+                // stays locked by the draggable/connectable/onConnect/delete/
+                // onPaneClick gates below, not by making the node inert.
+                elementsSelectable
                 onNodesChange={ctrl.onNodesChange}
                 onEdgesChange={ctrl.onEdgesChange}
                 onConnect={playing ? undefined : ctrl.onConnect}
                 onMoveEnd={ctrl.onMoveEnd}
                 onNodeClick={playing ? undefined : onNodeClick}
-                onNodeDoubleClick={playing ? undefined : onNodeDoubleClick}
+                // Double-click opens the node inspector in BOTH modes; while a
+                // run plays it opens read-only (the inspector is fully
+                // disabled). Zoom-on-double-click is held during a run so the
+                // inspect gesture is not swallowed by a canvas zoom.
+                onNodeDoubleClick={onNodeDoubleClick}
+                zoomOnDoubleClick={!playing}
                 onEdgeClick={playing ? undefined : onEdgeClick}
                 onEdgeMouseEnter={onEdgeMouseEnter}
                 onEdgeMouseLeave={onEdgeMouseLeave}
@@ -438,9 +520,43 @@ export function FlowEditor({
                 <Controls />
               </ReactFlow>
             </NodeOpenProvider>
+            <RunLogPanel events={runLog} />
           </div>
         </div>
       </div>
+
+      {runInputOpen && (
+        <Modal
+          title="Run input"
+          ariaLabel="Run with an operator directive"
+          onClose={() => setRunInputOpen(false)}
+          footer={
+            <>
+              <Button onClick={() => setRunInputOpen(false)}>Cancel</Button>
+              <Button variant="primary" onClick={handleRunWithInput}>
+                <PlayIcon />
+                Run
+              </Button>
+            </>
+          }
+        >
+          <Field label="Operator input" htmlFor="hw-run-input">
+            <Textarea
+              id="hw-run-input"
+              aria-label="Operator input"
+              rows={6}
+              value={runInput}
+              placeholder="A run-wide directive layered above every agent task at highest priority."
+              onChange={(e) => setRunInput(e.target.value)}
+            />
+          </Field>
+          <p className="hw-note">
+            Optional. Steers this run only - it overrides conflicting node
+            instructions and otherwise binds as an additional constraint. Leave
+            empty to run the graph as authored.
+          </p>
+        </Modal>
+      )}
 
       {editing && ctrl.selectedNode !== null && (
         <Modal

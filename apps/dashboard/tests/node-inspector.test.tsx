@@ -67,6 +67,28 @@ describe("NodeInspector", () => {
     expect(onChange).toHaveBeenCalledWith({ notify_completion: undefined });
   });
 
+  it("takes an agent_task off the board when 'Run on the project board' is unchecked", async () => {
+    const onChange = vi.fn();
+    const node = flowNode({ id: "build", type: "agent_task", prompt: "p" });
+    render(<NodeInspector node={node} onChange={onChange} />);
+
+    const toggle = screen.getByRole("checkbox", { name: /run on the project board/i });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith({ board: false });
+  });
+
+  it("restores an off-board agent_task to the board (board omitted)", async () => {
+    const onChange = vi.fn();
+    const node = flowNode({ id: "build", type: "agent_task", prompt: "p", board: false });
+    render(<NodeInspector node={node} onChange={onChange} />);
+
+    const toggle = screen.getByRole("checkbox", { name: /run on the project board/i });
+    expect(toggle).not.toBeChecked();
+    await userEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith({ board: undefined });
+  });
+
   it("edits a wait node's PR reference and timeout", () => {
     const onChange = vi.fn();
     const node = flowNode({
@@ -200,6 +222,20 @@ describe("NodeInspector", () => {
     render(<NodeInspector node={node} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Quality gate" } });
     expect(onChange).toHaveBeenCalledWith({ title: "Quality gate" });
+  });
+
+  it("edits a prompt node's text, clearing it to undefined when emptied", () => {
+    const onChange = vi.fn();
+    const node = flowNode({ id: "p", type: "prompt", prompt: "ship it" });
+    render(<NodeInspector node={node} onChange={onChange} />);
+
+    const field = screen.getByLabelText("Prompt");
+    expect(field).toHaveValue("ship it");
+    fireEvent.change(field, { target: { value: "ship the urgent fix first" } });
+    expect(onChange).toHaveBeenCalledWith({ prompt: "ship the urgent fix first" });
+    // Emptying the optional field keeps it absent, not "".
+    fireEvent.change(field, { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith({ prompt: undefined });
   });
 
   it("edits agent_task workdir and workspace type", async () => {

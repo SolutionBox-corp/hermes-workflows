@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FlowEditor } from "../src/editor/FlowEditor";
 import type { WorkflowsApi } from "../src/api/client";
@@ -200,6 +200,48 @@ describe("FlowEditor playback", () => {
     expect(calls).toEqual(["save", "run"]);
   });
 
+  it("starts the run with an operator directive entered in the Run input modal", async () => {
+    const client = stubClient();
+    render(<FlowEditor detail={detail} client={client} onOpenRun={vi.fn()} pollMs={10_000} />);
+
+    await waitFor(() => expect(playButton()).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: /run input/i }));
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /operator input/i }),
+      "ship the urgent fix first",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^run$/i }));
+
+    await waitFor(() =>
+      expect(client.runWorkflow).toHaveBeenCalledWith("deploy", {
+        input: "ship the urgent fix first",
+      }),
+    );
+  });
+
+  it("starts with no input when the plain Play button is used", async () => {
+    const client = stubClient();
+    render(<FlowEditor detail={detail} client={client} onOpenRun={vi.fn()} pollMs={10_000} />);
+
+    await clickPlay();
+
+    // No options object: a bare start keeps the run input null.
+    expect(client.runWorkflow).toHaveBeenCalledWith("deploy");
+  });
+
+  it("does not send a whitespace-only directive as input", async () => {
+    const client = stubClient();
+    render(<FlowEditor detail={detail} client={client} onOpenRun={vi.fn()} pollMs={10_000} />);
+
+    await waitFor(() => expect(playButton()).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: /run input/i }));
+    await userEvent.type(screen.getByRole("textbox", { name: /operator input/i }), "   ");
+    await userEvent.click(screen.getByRole("button", { name: /^run$/i }));
+
+    await waitFor(() => expect(client.runWorkflow).toHaveBeenCalled());
+    expect(client.runWorkflow).toHaveBeenCalledWith("deploy");
+  });
+
   it("does not start the run when the pre-play save fails", async () => {
     const saveWorkflow = vi.fn(async () => {
       throw new Error("disk full");
@@ -217,7 +259,8 @@ describe("FlowEditor playback", () => {
     await userEvent.click(screen.getByRole("button", { name: /auto-layout/i }));
     await clickPlay();
 
-    await screen.findByText(/save failed: disk full/i);
+    const toast = await screen.findByTestId("save-error-toast");
+    expect(toast.textContent).toMatch(/disk full/i);
     expect(runWorkflow).not.toHaveBeenCalled();
     expect(playButton()).toBeEnabled();
   });
@@ -237,8 +280,8 @@ describe("FlowEditor playback", () => {
 
     await clickPlay();
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/workflow is disabled/i);
+    const toast = await screen.findByTestId("playback-error-toast");
+    expect(toast.textContent).toMatch(/workflow is disabled/i);
     // The editor returns to idle so the operator can fix the cause and retry.
     expect(playButton()).toBeEnabled();
   });
@@ -261,10 +304,10 @@ describe("FlowEditor playback", () => {
 
     await clickPlay();
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/network down/i);
+    const toast = await screen.findByTestId("playback-error-toast");
+    expect(toast.textContent).toMatch(/network down/i);
     // The next successful poll clears the error instead of killing playback.
-    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument(), {
+    await waitFor(() => expect(screen.queryByTestId("playback-error-toast")).not.toBeInTheDocument(), {
       timeout: 1000,
     });
   });
@@ -287,6 +330,63 @@ describe("FlowEditor playback", () => {
     expect(playButton().textContent).toMatch(/running…/i);
     expect(screen.getByRole("button", { name: /add node/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+  });
+
+  it("shows the run-log panel while the run plays", async () => {
+    const listRuns = vi.fn(async () => [runSummary("running")]);
+    render(
+      <FlowEditor
+        detail={detail}
+        client={stubClient({ listRuns })}
+        onOpenRun={vi.fn()}
+        pollMs={10_000}
+      />,
+    );
+
+    // The curated run-log panel - present on the Runs inspector - now also
+    // surfaces during editor playback, fed from the same run state.
+    expect(await screen.findByText(/run started/i)).toBeInTheDocument();
+  });
+
+  it("opens a node read-only while the run plays", async () => {
+    const listRuns = vi.fn(async () => [runSummary("running")]);
+    const { container } = render(
+      <FlowEditor
+        detail={detail}
+        client={stubClient({ listRuns })}
+        onOpenRun={vi.fn()}
+        pollMs={10_000}
+      />,
+    );
+
+    // The mount attach check enters playback and renders the run nodes.
+    await waitFor(() => expect(container.querySelector('[data-status="running"]')).not.toBeNull());
+
+    // The node must stay pointer-interactive while the run plays: ReactFlow sets
+    // pointer-events:none on a node that is neither selectable nor draggable and
+    // has no click/mouse handler, which would make the double-click and the open
+    // affordance inert. (fireEvent ignores pointer-events, so this is the only
+    // way to guard the regression in jsdom.)
+    const wrapper = container.querySelector('[data-id="build"]') as HTMLElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper.style.pointerEvents).not.toBe("none");
+
+    // Open a node mid-run via its open affordance. Double-click drives the same
+    // openNode path, but ReactFlow's pointer gesture is undrivable in jsdom
+    // (d3-drag throws on mousedown), so the button stands in for it here. The
+    // button sits in an unmeasured (hidden) node subtree, so it is queried by
+    // aria-label and clicked with fireEvent (role queries skip hidden nodes).
+    const openBtn = await waitFor(() => {
+      const el = document.querySelector('[aria-label="Open node build"]');
+      if (el === null) throw new Error("open button not rendered yet");
+      return el as HTMLElement;
+    });
+    fireEvent.click(openBtn);
+
+    // The inspector opens fully disabled: a disabled <fieldset> renders every
+    // control read-only, so the live run can never be edited from here.
+    const promptField = await screen.findByLabelText("Prompt");
+    expect(promptField).toBeDisabled();
   });
 
   it("hands off to the inspector when the active run found on mount settles", async () => {
@@ -356,9 +456,9 @@ describe("FlowEditor playback", () => {
       />,
     );
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/active-run check failed/i);
-    expect(alert.textContent).toMatch(/runs store unreachable/i);
+    const toast = await screen.findByTestId("playback-error-toast");
+    expect(toast.textContent).toMatch(/active-run check failed/i);
+    expect(toast.textContent).toMatch(/runs store unreachable/i);
     expect(playButton()).toBeEnabled();
   });
 
@@ -384,8 +484,8 @@ describe("FlowEditor playback", () => {
 
     await clickPlay();
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/already has an active run/i);
+    const toast = await screen.findByTestId("playback-error-toast");
+    expect(toast.textContent).toMatch(/already has an active run/i);
     await waitFor(() => expect(playButton().textContent).toMatch(/running…/i));
     expect(playButton()).toBeDisabled();
   });

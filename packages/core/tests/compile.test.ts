@@ -215,3 +215,90 @@ describe("compileToHermesPlan — input_mapping", () => {
     expect(a?.input_mapping).toBeUndefined();
   });
 });
+
+describe("compileToHermesPlan — prompt node", () => {
+  test("layers a Prompt node's text onto each agent_task it feeds, and emits no task for itself", () => {
+    const workflow = wf(
+      [
+        { id: "p", type: "prompt", prompt: "ship the urgent fix first" },
+        { id: "a", type: "agent_task", prompt: "do the work" },
+        { id: "done", type: "finish" },
+      ],
+      [
+        { from: "p", to: "a" },
+        { from: "a", to: "done" },
+      ],
+    );
+    const plan = compileToHermesPlan(workflow);
+    // The prompt node creates no Kanban task.
+    expect(plan.kanban_tasks.map((t) => t.node)).toEqual(["a"]);
+    const a = plan.kanban_tasks.find((t) => t.node === "a");
+    expect(a?.node_prompt).toBe("ship the urgent fix first");
+  });
+
+  test("an agent_task with no incoming Prompt node carries no node_prompt", () => {
+    const plan = compileToHermesPlan(
+      wf(
+        [
+          { id: "a", type: "agent_task", prompt: "x" },
+          { id: "done", type: "finish" },
+        ],
+        [{ from: "a", to: "done" }],
+      ),
+    );
+    expect(plan.kanban_tasks.find((t) => t.node === "a")?.node_prompt).toBeUndefined();
+  });
+
+  test("joins several Prompt nodes feeding one agent_task in edge order", () => {
+    const plan = compileToHermesPlan(
+      wf(
+        [
+          { id: "p1", type: "prompt", prompt: "first" },
+          { id: "p2", type: "prompt", prompt: "second" },
+          { id: "a", type: "agent_task", prompt: "work" },
+          { id: "done", type: "finish" },
+        ],
+        [
+          { from: "p1", to: "a" },
+          { from: "p2", to: "a" },
+          { from: "a", to: "done" },
+        ],
+      ),
+    );
+    expect(plan.kanban_tasks.find((t) => t.node === "a")?.node_prompt).toBe("first\n\nsecond");
+  });
+});
+
+describe("compileToHermesPlan — off-board nodes", () => {
+  test("board: false marks the compiled task off_board; default stays absent", () => {
+    const plan = compileToHermesPlan(
+      wf(
+        [
+          { id: "internal", type: "agent_task", prompt: "orchestrate", board: false },
+          { id: "onboard", type: "agent_task", prompt: "work" },
+          { id: "done", type: "finish" },
+        ],
+        [
+          { from: "internal", to: "onboard" },
+          { from: "onboard", to: "done" },
+        ],
+      ),
+    );
+    expect(plan.kanban_tasks.find((t) => t.node === "internal")?.off_board).toBe(true);
+    // An on-board node (board absent, or true) carries no off_board flag.
+    expect(plan.kanban_tasks.find((t) => t.node === "onboard")?.off_board).toBeUndefined();
+  });
+
+  test("board: true is explicitly on-board (no off_board flag)", () => {
+    const plan = compileToHermesPlan(
+      wf(
+        [
+          { id: "a", type: "agent_task", prompt: "work", board: true },
+          { id: "done", type: "finish" },
+        ],
+        [{ from: "a", to: "done" }],
+      ),
+    );
+    expect(plan.kanban_tasks.find((t) => t.node === "a")?.off_board).toBeUndefined();
+  });
+});

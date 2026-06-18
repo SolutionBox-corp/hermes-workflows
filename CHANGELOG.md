@@ -4,6 +4,62 @@ All notable changes to Hermes Workflows are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 - 2026-06-18
+
+A Prompt node that packages the operator-input mechanism as an authorable graph
+node, plus a set of editor legibility fixes: panning no longer marks the graph
+dirty, the header drops its status text and inline errors in favour of toasts, a
+node opens read-only on a double-click during a run, and the run-log panel shows
+during editor playback.
+
+### Added
+
+- **Prompt node.** A new `prompt` node type: an optional block of authored text
+  with one input and one output, nothing else. Its text becomes the operator
+  directive for every `agent_task` reachable downstream of it (a transitive walk
+  over the edges), so a Prompt node governs the whole sub-flow from its insertion
+  point. The directive holds the highest authority over each step's decisions but
+  is carried out only through that step's own role - a read-only step stays
+  read-only, so a run-wide directive cannot make a step overstep and
+  short-circuit the graph. The same layering the run `--input` applies, packaged
+  as an authorable graph node. Routing-only: it creates no Kanban card and runs
+  no worker. When an agent task's own prompt is empty the Prompt node text
+  becomes the whole instruction; the run `--input`, when set, still sits above it.
+- **Operator-input field on the editor Run affordance.** The editor can now
+  supply a run-wide operator directive: a Run-input button next to Play opens a
+  modal with an optional textarea whose text is layered above every `agent_task`
+  prompt at highest priority for that run (the same directive the
+  `/workflow run --input` CLI supplies). The plain Play button keeps its
+  no-input start.
+- **Off-board agent_task nodes.** A project-scope `agent_task` can set
+  `board: false` to run off the project board through the direct profile runner:
+  no Kanban card is created, so internal orchestration steps no longer clutter
+  the operator's board - real cards stay reserved for the actual work (an
+  `adopt` node, or an epic card the run opens). Off-board nodes run without a
+  project worktree, so they are for reasoning/orchestration steps; a no-op in
+  `global` scope.
+
+### Fixed
+
+- **Prompt-node text reaches the first dispatched card.** A regression guard
+  asserts a Prompt node wired as the entry layers its authored text into the
+  first scheduled card body at run start (the node resolves instantly and its
+  successor schedules in the same advance).
+- **Panning the canvas no longer marks the workflow dirty.** A pure pan or zoom
+  no longer flips the editor to "unsaved"; the viewport still rides along on the
+  next genuine save.
+- **Editor status text removed from the header.** The save-status label
+  ("Unsaved changes" / "Saved" / "No changes") is gone - the Save button is
+  enabled exactly when there are unsaved changes, which is the signal.
+- **Editor errors surface as toasts.** Run start, poll, and attach failures show
+  as a dismissible toast instead of inline header text, and self-heal: a
+  transient poll error clears on the next good poll.
+- **Double-clicking a node during a run opens it read-only.** Previously the
+  double-click only zoomed the canvas; it now opens the node inspector fully
+  disabled, so a live run can be inspected but not edited.
+- **Run-log panel during editor playback.** The curated, timestamped run log now
+  shows while a run plays from the editor, not only on the Runs inspector.
+
 ## 0.3.0 - 2026-06-16
 
 Operator control and run resilience: a free-form run input that overrides node

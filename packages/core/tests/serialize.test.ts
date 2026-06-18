@@ -68,6 +68,51 @@ describe("serializeWorkflow", () => {
     expect(round.workflow).toEqual(wf);
   });
 
+  test("round-trips a prompt node (with text and bare)", () => {
+    const wf = fromObject({
+      id: "pn",
+      name: "PN",
+      version: 1,
+      scope: { type: "global" },
+      trigger: { type: "manual" },
+      nodes: [
+        { id: "p", type: "prompt", prompt: "primary instruction" },
+        { id: "bare", type: "prompt" },
+        { id: "a", type: "agent_task", prompt: "work", profile: "x" },
+        { id: "done", type: "finish" },
+      ],
+      edges: [
+        { from: "p", to: "a" },
+        { from: "bare", to: "a" },
+        { from: "a", to: "done" },
+      ],
+    }).workflow;
+    const round = parseWorkflow(serializeWorkflow(wf));
+    expect(round.workflow).toEqual(wf);
+  });
+
+  test("round-trips an agent_task board flag (off-board and explicit on-board)", () => {
+    const wf = fromObject({
+      id: "ob",
+      name: "OB",
+      version: 1,
+      scope: { type: "project" },
+      trigger: { type: "manual" },
+      defaults: { profile: "p" },
+      nodes: [
+        { id: "internal", type: "agent_task", prompt: "orchestrate", board: false },
+        { id: "onboard", type: "agent_task", prompt: "work", board: true },
+        { id: "done", type: "finish" },
+      ],
+      edges: [
+        { from: "internal", to: "onboard" },
+        { from: "onboard", to: "done" },
+      ],
+    }).workflow;
+    const round = parseWorkflow(serializeWorkflow(wf));
+    expect(round.workflow).toEqual(wf);
+  });
+
   test("round-trips the enabled flag", () => {
     for (const enabled of [true, false] as const) {
       const wf = fromObject({

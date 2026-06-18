@@ -24,6 +24,11 @@ export interface CompiledKanbanTask {
   /** Placeholder -> `{{nodes.<id>.output}}` references the engine resolves into
    *  the prompt at schedule time. Carried verbatim; the engine substitutes. */
   input_mapping?: Record<string, string>;
+  /** Authored text from a Prompt node feeding this task (an edge
+   *  `prompt -> agent_task`). The engine layers it ABOVE the resolved prompt as
+   *  the primary instruction, the same way the operator's run `--input` layers.
+   *  Absent when no Prompt node feeds this task. */
+  node_prompt?: string;
   model?: string;
   skills?: string[];
   workspace?: "scratch" | "worktree";
@@ -40,6 +45,11 @@ export interface CompiledKanbanTask {
   /** Per-node override of the per-card completion subscription; unset inherits
    *  the workflow-level `subscribe_cards` (see AgentTaskNode.notify_completion). */
   notify_completion?: boolean;
+  /** Run this node OFF the board (no Kanban card), via the direct profile
+   *  runner, so internal orchestration steps do not clutter the operator's
+   *  board (see AgentTaskNode.board). Set only when the node opted out with
+   *  `board: false`; absent means the node creates a card as before. */
+  off_board?: boolean;
 }
 
 /** A script node compiled for local execution by the plugin's ScriptExecutor.
@@ -105,6 +115,42 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
 
   const defaultRetries = workflow.defaults?.max_retries;
 
+  // A Prompt node does no work; its authored text is a PRIMARY INSTRUCTION for
+  // every agent_task DOWNSTREAM of it — from where it is embedded onward,
+  // following edges transitively, not merely its immediate successor. A Prompt
+  // node may sit anywhere in any workflow; an empty one (no text) is a pass-
+  // through no-op and contributes nothing. When several Prompt nodes reach the
+  // same task their texts join in node-declaration order. Resolve the per-target
+  // text here so the engine layers it at schedule time.
+  const promptNodeText = new Map<string, string>();
+  for (const node of workflow.nodes) {
+    if (node.type === "prompt" && node.prompt) promptNodeText.set(node.id, node.prompt);
+  }
+  const adjacency = new Map<string, string[]>();
+  for (const edge of workflow.edges) {
+    const outs = adjacency.get(edge.from) ?? [];
+    outs.push(edge.to);
+    adjacency.set(edge.from, outs);
+  }
+  const nodePromptByTarget = new Map<string, string>();
+  // Iterate Prompt nodes in declaration order so a task reached by several gets
+  // their texts in a stable order. For each, walk everything reachable downstream
+  // and layer its text onto each node once (the seen-set also breaks cycles).
+  for (const node of workflow.nodes) {
+    const text = promptNodeText.get(node.id);
+    if (text === undefined) continue;
+    const seen = new Set<string>([node.id]);
+    const queue = [...(adjacency.get(node.id) ?? [])];
+    while (queue.length > 0) {
+      const target = queue.shift() as string;
+      if (seen.has(target)) continue;
+      seen.add(target);
+      const prev = nodePromptByTarget.get(target);
+      nodePromptByTarget.set(target, prev === undefined ? text : `${prev}\n\n${text}`);
+      for (const next of adjacency.get(target) ?? []) queue.push(next);
+    }
+  }
+
   for (const node of workflow.nodes) {
     if (node.type === "script") {
       const step: CompiledScript = { node: node.id, kind: "script", command: node.command };
@@ -132,6 +178,11 @@ export function compileToHermesPlan(workflow: Workflow): HermesPlan {
     };
     if (node.title !== undefined) task.title = node.title;
     if (node.input_mapping !== undefined) task.input_mapping = node.input_mapping;
+    const nodePrompt = nodePromptByTarget.get(node.id);
+    if (nodePrompt !== undefined) task.node_prompt = nodePrompt;
+    // `board: false` runs the node off the project board (no card); carried as
+    // a positive flag so an absent value never reads as off-board downstream.
+    if (node.board === false) task.off_board = true;
     if (node.adopt !== undefined) task.adopt = node.adopt;
     if (node.task_ref !== undefined) task.task_ref = node.task_ref;
     if (node.review_profile !== undefined) task.review_profile = node.review_profile;

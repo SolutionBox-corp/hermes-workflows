@@ -5,7 +5,14 @@
  * uses it) so loading is parse + validate with no field remapping layer.
  */
 
-export type NodeType = "agent_task" | "script" | "condition" | "human_review" | "finish" | "wait";
+export type NodeType =
+  | "agent_task"
+  | "script"
+  | "condition"
+  | "human_review"
+  | "finish"
+  | "wait"
+  | "prompt";
 
 export type ReviewOption = "approved" | "rejected" | "needs_changes";
 
@@ -72,6 +79,18 @@ export interface AgentTaskNode {
    * others stay quiet without changing the workflow default.
    */
   notify_completion?: boolean;
+  /**
+   * Whether this node materialises as a card on the project board. Default
+   * (absent/`true`) creates a Kanban card the worker pool drives, as before.
+   * `false` runs the node OFF the board via the direct profile runner: no card
+   * is created, so internal orchestration steps do not clutter the operator's
+   * board - reserve real cards for the actual work (an `adopt` node driving an
+   * existing card, or an epic card the run itself decides to open). Off-board
+   * nodes run without a project worktree, so this is for reasoning/orchestration
+   * steps, not for nodes that must commit to the repo. A no-op in `global`
+   * scope, where every node already runs off-board through the direct runner.
+   */
+  board?: boolean;
 }
 
 /**
@@ -150,10 +169,30 @@ export interface WaitNode {
   timeout_seconds?: number;
 }
 
+/**
+ * An authored block of text that does no work of its own. Placed before an
+ * agent_task (an edge `prompt -> agent_task`), its text layers ABOVE that
+ * agent_task's own prompt as the primary instruction - the same layering the
+ * operator's run `--input` applies, packaged as an authorable graph node.
+ *
+ * Routing-only: like a `condition` node it resolves instantly and follows its
+ * outgoing edge, creating no Kanban card and running no worker. The text is
+ * optional - an empty Prompt node is a no-op pass-through.
+ */
+export interface PromptNode {
+  id: string;
+  type: "prompt";
+  title?: string;
+  description?: string;
+  /** The instruction text layered above each agent_task this node feeds. */
+  prompt?: string;
+}
+
 export type WorkflowNode =
   | AgentTaskNode
   | ScriptNode
   | ConditionNode
   | HumanReviewNode
   | FinishNode
-  | WaitNode;
+  | WaitNode
+  | PromptNode;
