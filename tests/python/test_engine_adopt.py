@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -268,6 +269,125 @@ def test_adopt_does_not_settle_a_running_card_with_prior_failures(tmp_path: Path
 
         run = eng.advance(spec, "r")
         node = run["nodes"]["drive"]
+        assert node["status"] in ("scheduled", "running")
+        assert node.get("outcome") is None
+    finally:
+        board.close()
+
+
+def test_adopt_time_boxes_a_blocked_card_instead_of_polling_forever(tmp_path: Path) -> None:
+    board = kb.connect(db_path=tmp_path / "kanban.db")
+    try:
+        target = kb.create_task(board, title="will-block", created_by="op", triage=True)
+        eng = _engine(tmp_path, board)
+        # Time-box to zero so the first blocked observation settles immediately.
+        eng.adopt_blocked_timeout_seconds = 0
+        spec = _spec(tmp_path, _adopt_spec(target))
+
+        run = eng.run(spec, "r")
+        assert run["nodes"]["drive"]["status"] == "scheduled"
+
+        # A worker ran `kanban block` (consecutive_failures stays 0): the card is
+        # blocked and never reaches terminal on its own. Without the time-box the
+        # node would poll it forever - the silent 15h+ hang this guards against.
+        board.execute(
+            "UPDATE tasks SET status = 'blocked', consecutive_failures = 0 WHERE id = ?",
+            (target,),
+        )
+        board.commit()
+
+        run = eng.advance(spec, "r")
+        node = run["nodes"]["drive"]
+        assert node["status"] == "completed"
+        assert node["outcome"] == "failure"
+        assert "blocked" in (node["output"] or "")
+        assert node.get("adopt_blocked_since") is None
+    finally:
+        board.close()
+
+
+def test_adopt_keeps_polling_a_blocked_card_within_the_window(tmp_path: Path) -> None:
+    board = kb.connect(db_path=tmp_path / "kanban.db")
+    try:
+        target = kb.create_task(board, title="blocked-but-recoverable", created_by="op", triage=True)
+        eng = _engine(tmp_path, board)
+        eng.adopt_blocked_timeout_seconds = 3600  # generous window: do not settle yet
+        spec = _spec(tmp_path, _adopt_spec(target))
+
+        run = eng.run(spec, "r")
+        board.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (target,))
+        board.commit()
+
+        run = eng.advance(spec, "r")
+        node = run["nodes"]["drive"]
+        # Within the window the node stays active and records when the block began.
+        assert node["status"] in ("scheduled", "running")
+        assert node.get("outcome") is None
+        assert node.get("adopt_blocked_since") is not None
+        assert "blocked:drive" in (run.get("notified") or [])
+    finally:
+        board.close()
+
+
+def test_adopt_blocked_time_box_accumulates_across_ticks(tmp_path: Path) -> None:
+    """The block clock must survive a tick (node state is reloaded from runs.db
+    each tick): a non-zero window settles only because `adopt_blocked_since` is
+    PERSISTED. If it were dropped on save, every tick would re-stamp now, elapsed
+    would stay 0, and the run would hang forever (the bug this guards)."""
+    board = kb.connect(db_path=tmp_path / "kanban.db")
+    try:
+        target = kb.create_task(board, title="long-blocked", created_by="op", triage=True)
+        eng = _engine(tmp_path, board)
+        eng.adopt_blocked_timeout_seconds = 100  # non-zero: must accumulate, not settle now
+        spec = _spec(tmp_path, _adopt_spec(target))
+
+        run = eng.run(spec, "r")
+        board.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (target,))
+        board.commit()
+
+        # Tick 1: records the block start and keeps polling (within the window).
+        run = eng.advance(spec, "r")
+        node = run["nodes"]["drive"]
+        assert node["status"] in ("scheduled", "running")
+        assert node.get("adopt_blocked_since") is not None
+
+        # Rewind the PERSISTED start past the window, then reload+advance. The
+        # next tick reads the stored timestamp (proving it round-tripped through
+        # runs.db) and settles. A dropped field would re-stamp now and never fire.
+        loaded = eng._load("r")
+        loaded["nodes"]["drive"]["adopt_blocked_since"] = int(time.time()) - 10_000
+        eng._save(loaded)
+
+        run = eng.advance(spec, "r")
+        node = run["nodes"]["drive"]
+        assert node["status"] == "completed"
+        assert node["outcome"] == "failure"
+        assert "blocked" in (node["output"] or "")
+    finally:
+        board.close()
+
+
+def test_adopt_blocked_clock_resets_when_the_card_recovers(tmp_path: Path) -> None:
+    board = kb.connect(db_path=tmp_path / "kanban.db")
+    try:
+        target = kb.create_task(board, title="recovers", created_by="op", triage=True)
+        eng = _engine(tmp_path, board)
+        eng.adopt_blocked_timeout_seconds = 3600
+        spec = _spec(tmp_path, _adopt_spec(target))
+
+        run = eng.run(spec, "r")
+        board.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (target,))
+        board.commit()
+        run = eng.advance(spec, "r")
+        assert run["nodes"]["drive"].get("adopt_blocked_since") is not None
+
+        # The card is unblocked and a worker is now on it: the block clock clears
+        # so a later block starts a fresh window rather than counting stale time.
+        board.execute("UPDATE tasks SET status = 'running' WHERE id = ?", (target,))
+        board.commit()
+        run = eng.advance(spec, "r")
+        node = run["nodes"]["drive"]
+        assert node.get("adopt_blocked_since") is None
         assert node["status"] in ("scheduled", "running")
         assert node.get("outcome") is None
     finally:

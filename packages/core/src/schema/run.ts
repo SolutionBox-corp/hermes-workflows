@@ -4,6 +4,7 @@
  */
 
 import type { ReviewOption } from "./nodes.ts";
+import type { ParamValue } from "../templates/params.ts";
 
 export type RunStatus = "created" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 
@@ -125,6 +126,12 @@ export interface NodeRunState {
   output?: string;
   /** Epoch seconds a `wait` node first began polling, for its optional timeout. */
   wait_started_at?: number;
+  /**
+   * Epoch seconds an `adopt` node first observed a driven card sitting `blocked`,
+   * for its time-box. Persisted so the elapsed wait accumulates across ticks (the
+   * node state is reloaded each tick); cleared when the card recovers.
+   */
+  adopt_blocked_since?: number;
   error?: string;
   /**
    * Monotonic completion order within the run, assigned by the bridge each time
@@ -167,5 +174,13 @@ export interface RunState {
    * The engine is the only writer; absent means nothing emitted yet.
    */
   notified?: string[];
+  /**
+   * Resolved template parameter values for this run, validated at run-create
+   * (`fillParams` against the workflow's declared `params`). The engine
+   * substitutes each `{{params.<name>}}` placeholder in a node prompt with its
+   * value at schedule time. Persisted so it applies to every node across ticks;
+   * absent for a non-parameterized workflow or a run started with no params.
+   */
+  params?: Record<string, ParamValue>;
   nodes: Record<string, NodeRunState>;
 }

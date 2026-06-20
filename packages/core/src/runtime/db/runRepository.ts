@@ -8,6 +8,7 @@
 import type { Database } from "bun:sqlite";
 
 import type { RunState, RunStatus, NodeRunState, NodeTelemetry } from "../../schema/run.ts";
+import type { ParamValue } from "../../templates/params.ts";
 import { ACTIVE_NODE_STATUSES, ACTIVE_RUN_STATUSES } from "../status.ts";
 
 /** The active statuses as a quoted SQL `IN (...)` list. Safe to interpolate:
@@ -96,6 +97,7 @@ interface RunRow {
   error: string | null;
   origin: string | null;
   notified: string | null;
+  params_json: string | null;
 }
 
 interface NodeRow {
@@ -106,6 +108,7 @@ interface NodeRow {
   reviewed_task_ids: string | null;
   wait_started_at: string | null;
   adopt_seq_json: string | null;
+  adopt_blocked_since: string | null;
   task_ids_json: string | null;
   outcome: string | null;
   review_decision: string | null;
@@ -190,8 +193,8 @@ export class RunRepository {
       this.db
         .query(
           `INSERT INTO workflow_runs
-             (id, workflow_id, workflow_version, status, project_id, input_json, started_at, finished_at, error, origin, notified)
-           VALUES ($id, $wf, $ver, $status, $project, $input, $started, $finished, $error, $origin, $notified)
+             (id, workflow_id, workflow_version, status, project_id, input_json, started_at, finished_at, error, origin, notified, params_json)
+           VALUES ($id, $wf, $ver, $status, $project, $input, $started, $finished, $error, $origin, $notified, $params)
            ON CONFLICT(id) DO UPDATE SET
              status = excluded.status,
              project_id = excluded.project_id,
@@ -202,10 +205,12 @@ export class RunRepository {
              started_at = COALESCE(workflow_runs.started_at, excluded.started_at),
              finished_at = excluded.finished_at,
              error = excluded.error,
-             -- origin and notified live on the RunState, which every save carries
-             -- in full, so overwriting with the incoming value is correct.
+             -- origin, notified, and params live on the RunState, which every
+             -- save carries in full, so overwriting with the incoming value is
+             -- correct.
              origin = excluded.origin,
-             notified = excluded.notified`,
+             notified = excluded.notified,
+             params_json = excluded.params_json`,
         )
         .run({
           $id: run.run_id,
@@ -224,6 +229,8 @@ export class RunRepository {
           $error: meta.error ?? null,
           $origin: run.origin ?? null,
           $notified: run.notified && run.notified.length > 0 ? JSON.stringify(run.notified) : null,
+          $params:
+            run.params && Object.keys(run.params).length > 0 ? JSON.stringify(run.params) : null,
         });
 
       for (const node of Object.values(run.nodes)) {
@@ -237,8 +244,8 @@ export class RunRepository {
     this.db
       .query(
         `INSERT INTO workflow_node_runs
-           (id, run_id, node_id, status, hermes_task_id, driven_task_ids, reviewed_task_ids, wait_started_at, adopt_seq_json, task_ids_json, outcome, review_decision, review_note, seq, output_json, error, telemetry_json)
-         VALUES ($id, $run, $node, $status, $task, $driven, $reviewed, $waitStarted, $adoptSeq, $taskIds, $outcome, $review, $reviewNote, $seq, $output, $error, $telemetry)
+           (id, run_id, node_id, status, hermes_task_id, driven_task_ids, reviewed_task_ids, wait_started_at, adopt_seq_json, adopt_blocked_since, task_ids_json, outcome, review_decision, review_note, seq, output_json, error, telemetry_json)
+         VALUES ($id, $run, $node, $status, $task, $driven, $reviewed, $waitStarted, $adoptSeq, $adoptBlocked, $taskIds, $outcome, $review, $reviewNote, $seq, $output, $error, $telemetry)
          ON CONFLICT(id) DO UPDATE SET
            status = excluded.status,
            hermes_task_id = excluded.hermes_task_id,
@@ -246,6 +253,7 @@ export class RunRepository {
            reviewed_task_ids = excluded.reviewed_task_ids,
            wait_started_at = excluded.wait_started_at,
            adopt_seq_json = excluded.adopt_seq_json,
+           adopt_blocked_since = excluded.adopt_blocked_since,
            task_ids_json = excluded.task_ids_json,
            outcome = excluded.outcome,
            review_decision = excluded.review_decision,
@@ -271,6 +279,8 @@ export class RunRepository {
             : null,
         $waitStarted: node.wait_started_at === undefined ? null : String(node.wait_started_at),
         $adoptSeq: node.adopt_seq === undefined ? null : JSON.stringify(node.adopt_seq),
+        $adoptBlocked:
+          node.adopt_blocked_since === undefined ? null : String(node.adopt_blocked_since),
         $taskIds: node.task_ids && node.task_ids.length > 0 ? JSON.stringify(node.task_ids) : null,
         $outcome: node.outcome ?? null,
         $review: node.review_decision ?? null,
@@ -309,6 +319,7 @@ export class RunRepository {
       if (n.adopt_seq_json !== null) {
         node.adopt_seq = JSON.parse(n.adopt_seq_json) as NodeRunState["adopt_seq"];
       }
+      if (n.adopt_blocked_since !== null) node.adopt_blocked_since = Number(n.adopt_blocked_since);
       if (n.task_ids_json !== null) {
         node.task_ids = JSON.parse(n.task_ids_json) as string[];
       }
@@ -341,6 +352,10 @@ export class RunRepository {
     if (row.notified !== null) {
       const parsed = JSON.parse(row.notified) as string[];
       if (parsed.length > 0) run.notified = parsed;
+    }
+    if (row.params_json !== null) {
+      const parsed = JSON.parse(row.params_json) as Record<string, ParamValue>;
+      if (parsed && Object.keys(parsed).length > 0) run.params = parsed;
     }
     return run;
   }

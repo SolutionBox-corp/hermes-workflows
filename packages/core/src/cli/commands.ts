@@ -26,6 +26,8 @@ import type { RunSummary, RunMeta, LatestRun } from "../runtime/db/runRepository
 import { SpecStore, chooseWriteRoot } from "../runtime/specStore.ts";
 import type { SpecSummary, SpecDetail, WriteRoots } from "../runtime/specStore.ts";
 import { fromObject } from "../schema/load.ts";
+import { fillParams, ParamFillError } from "../templates/params.ts";
+import type { ParamValue, WorkflowParam } from "../templates/params.ts";
 
 export interface Explanation {
   id: string;
@@ -146,6 +148,38 @@ function timingMeta(run: RunState, atCreate: boolean): RunMeta {
   return meta;
 }
 
+/**
+ * Validate the supplied raw param values (a JSON object, as sent by every
+ * instantiation surface) against the workflow's declared params and return the
+ * resolved value map. `fillParams` rejects unknown names, enforces required
+ * params, and coerces enum/int/bool. Returns undefined when no params were
+ * supplied. Throws (failing the run-create loudly) on invalid JSON or values.
+ */
+function resolveRunParams(
+  declared: WorkflowParam[] | undefined,
+  paramsJson: string | undefined,
+): Record<string, ParamValue> | undefined {
+  const declaredParams = declared ?? [];
+  // No --params: a non-template workflow is untouched, but a template still
+  // validates against an empty value set so a missing REQUIRED param fails at
+  // run-create (and declared defaults are applied) rather than leaking through
+  // as an unresolved {{params.X}} at schedule time.
+  if (paramsJson === undefined || paramsJson.trim() === "") {
+    if (declaredParams.length === 0) return undefined;
+    return fillParams(declaredParams, {});
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(paramsJson);
+  } catch (error) {
+    throw new ParamFillError(`--params is not valid JSON: ${(error as Error).message}`);
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ParamFillError("--params must be a JSON object of name=value pairs");
+  }
+  return fillParams(declaredParams, raw as Record<string, ParamValue>);
+}
+
 export async function cmdRunCreate(
   dbPath: string,
   specPath: string,
@@ -153,9 +187,11 @@ export async function cmdRunCreate(
   projectId?: string,
   origin?: string,
   input?: string,
+  paramsJson?: string,
 ): Promise<RunState> {
   const workflow = await loadWorkflow(specPath);
-  const run = createRunState(workflow, runId, projectId, origin, input);
+  const params = resolveRunParams(workflow.params, paramsJson);
+  const run = createRunState(workflow, runId, projectId, origin, input, params);
   // Single-flight: throws ActiveRunExistsError when the workflow already has
   // an active run (the bridge maps the error name to HTTP 409).
   repository(dbPath).createRun(run, timingMeta(run, true));
