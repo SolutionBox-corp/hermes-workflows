@@ -4,6 +4,48 @@ All notable changes to Hermes Workflows are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 - 2026-06-20
+
+Parameterized workflows can now be instantiated with real values from every
+in-repo surface, and a long-standing `adopt` hang on a blocked driven card is
+closed. A template declares typed `params`, node prompts interpolate
+`{{params.X}}`, and the core validates and substitutes the values at run start.
+
+### Added
+
+- **Template-parameter instantiation.** A run carries resolved `params`
+  (persisted in a new `params_json` column). `run-create --params <json>`
+  validates supplied values against the workflow's declared params with
+  `fillParams` - an unknown name, a missing required value, or a bad
+  enum/int/bool fails loud, and declared defaults are applied. The engine
+  substitutes each `{{params.<name>}}` placeholder over the fully composed node
+  prompt at schedule time, failing loud on a placeholder with no run value (the
+  same contract as `input_mapping`). Three surfaces fill the same schema: the
+  dashboard Run form (one native field per param), the
+  `/workflow run <id> [project] name=value …` chat command (quotes preserved),
+  and the run API `POST /workflows/{id}/run` with a `params` object.
+- **`unknown_param_ref` validation.** A `{{params.X}}` reference to a param the
+  workflow does not declare is rejected at author time, in both `agent_task` and
+  `prompt` nodes.
+
+### Fixed
+
+- **`adopt` no longer hangs on a blocked driven card.** A driven Kanban card a
+  worker `kanban block`s (consecutive failures stay 0, so the dispatch-stuck
+  guard never trips) used to be polled forever, wedging the run in `running`
+  indefinitely. The blocked branch is now time-boxed
+  (`adopt_blocked_timeout_seconds`, default 6h) and settles the node failure
+  loudly; the clock is persisted across ticks and resets when the card recovers.
+
+### Changed
+
+- **Hermes compatibility note.** Node output is captured from the worker
+  session's final result, which must survive a mid-run context auto-compression
+  (session rotation). The README now documents that this requires a Hermes build
+  with the compression fixes (#48584, #48633); cards are created via `kanban_db`,
+  not the `kanban_create` tool, so #48635 auto-subscribe-on-create does not apply
+  to workflow cards.
+
 ## 0.4.0 - 2026-06-18
 
 A Prompt node that packages the operator-input mechanism as an authorable graph
