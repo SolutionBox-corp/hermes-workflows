@@ -6,7 +6,10 @@ Subcommands:
   advance-run <run_id>               advance one run (the event-driven path)
   status <run_id>                    print a run's current state
   cancel <run_id>                    cancel a run and its still-active nodes
+  resume <run_id> [--node|--all]     resume a stalled/failed run under the live spec
   review <run_id> <node_id> <dec>    resolve a human_review node
+  export <workflow_id> --as-template share a workflow as an installation-
+                                     agnostic template (+ adaptation guide)
 
 Each prints a JSON document to stdout. The installed wrapper (``bin/hermes-
 workflows``) execs this module; cron jobs invoke the same command.
@@ -18,6 +21,7 @@ import argparse
 import json
 import sys
 import uuid
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from . import cli_bridge, config
@@ -158,13 +162,25 @@ def _dispatch(args: argparse.Namespace, engine: Engine) -> Any:
         project_id = _default_project(engine, spec, args.project)
         run_id = f"{args.workflow_id}-{uuid.uuid4().hex[:8]}"
         try:
+            params = json.loads(args.params) if args.params else None
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"--params is not valid JSON: {exc}") from exc
+        if params is not None and not isinstance(params, dict):
+            raise SystemExit("--params must be a JSON object")
+        try:
             run = engine.run(
-                spec, run_id, project_id=project_id, origin=args.origin, input=args.input
+                spec,
+                run_id,
+                project_id=project_id,
+                origin=args.origin,
+                input=args.input,
+                params=params,
             )
         except cli_bridge.CoreBridgeError as exc:
-            # Single-flight refusal is an expected operator-facing outcome:
-            # exit with the core's message, not a traceback.
-            if exc.kind == "ActiveRunExistsError":
+            # Single-flight refusal and a param-validation failure are both
+            # expected operator-facing outcomes: exit with the core's message,
+            # not a traceback.
+            if exc.kind in ("ActiveRunExistsError", "ParamFillError"):
                 raise SystemExit(exc.detail) from exc
             raise
         # A run that survived its first advance still needs future advances;
@@ -191,9 +207,46 @@ def _dispatch(args: argparse.Namespace, engine: Engine) -> Any:
         return engine.status_live(spec, args.run_id)
     if args.command == "cancel":
         return engine.cancel(args.run_id)
+    if args.command == "resume":
+        try:
+            run = engine.resume(
+                config.spec_roots(),
+                args.run_id,
+                node=args.node,
+                reset_all=args.all,
+            )
+        except ValueError as exc:
+            # ResumeError (active run / spec drift / no-or-many failed nodes) and
+            # unknown-run/unresolvable-spec: a clean, traceback-free message.
+            raise SystemExit(str(exc)) from exc
+        except cli_bridge.CoreBridgeError as exc:
+            # The core's own refusals: single-flight (reviving next to an active
+            # sibling) and a non-failed --node target.
+            if exc.kind in ("ActiveRunExistsError", "RetryError", "NotFoundError"):
+                raise SystemExit(exc.detail) from exc
+            raise
+        # Like `run`: a resumed run that is still active needs future advances,
+        # so arm the singleton tick (it tears itself down once idle).
+        if run.get("status") in ACTIVE_RUN_STATUSES:
+            from .bridge import cron
+
+            cron.ensure_workflow_tick()
+        return run
     if args.command == "review":
         spec = _spec_path_for_run(engine, args.run_id)
         return engine.decide_review(spec, args.run_id, args.node_id, args.decision, note=args.note)
+    if args.command == "export":
+        if not args.as_template:
+            raise SystemExit("export currently supports only --as-template")
+        from . import template_export
+
+        out_dir = Path(args.out_dir) if args.out_dir else None
+        try:
+            return template_export.export(args.workflow_id, out_dir=out_dir)
+        except cli_bridge.CoreBridgeError as exc:
+            if exc.kind == "NotFoundError":
+                raise SystemExit(exc.detail) from exc
+            raise
     raise SystemExit(f"unknown command '{args.command}'")
 
 
@@ -210,6 +263,11 @@ def _parser() -> argparse.ArgumentParser:
     # Free-form operator input, layered above every agent_task prompt at highest
     # priority (overrides conflicting node instructions, augments the rest).
     p_run.add_argument("--input", default=None)
+    # Template parameter values as a JSON object ({"name": value, ...}). The core
+    # validates them against the workflow's declared params (rejecting unknown or
+    # missing-required values) and substitutes each as {{params.<name>}}. Omit
+    # for a workflow with no params, or one whose params are all optional.
+    p_run.add_argument("--params", default=None)
 
     sub.add_parser("advance-all", help="advance every active run")
 
@@ -222,12 +280,39 @@ def _parser() -> argparse.ArgumentParser:
     p_cancel = sub.add_parser("cancel", help="cancel a run (and its active nodes)")
     p_cancel.add_argument("run_id")
 
+    p_resume = sub.add_parser(
+        "resume", help="resume a stalled/failed run from its failed node (or --all)"
+    )
+    p_resume.add_argument("run_id")
+    # --node (an explicit failed node) and --all (full restart) are mutually
+    # exclusive; the bare default resumes THE single failed node.
+    resume_target = p_resume.add_mutually_exclusive_group()
+    resume_target.add_argument(
+        "--node", default=None, help="resume a specific failed node (must be failed)"
+    )
+    resume_target.add_argument(
+        "--all",
+        action="store_true",
+        help="full restart: reset the whole graph and re-run from the entry node",
+    )
+
     p_review = sub.add_parser("review", help="resolve a human_review node")
     p_review.add_argument("run_id")
     p_review.add_argument("node_id")
     p_review.add_argument("decision")
     # Optional operator payload, consumable downstream as {{nodes.<gate>.review_note}}.
     p_review.add_argument("--note", default=None)
+
+    p_export = sub.add_parser("export", help="export a workflow as a shareable template")
+    p_export.add_argument("workflow_id")
+    p_export.add_argument(
+        "--as-template",
+        action="store_true",
+        help="decouple installation bindings into placeholders + an adaptation guide",
+    )
+    p_export.add_argument(
+        "--out-dir", default=None, help="where to write the bundle (default: the export cache dir)"
+    )
 
     return parser
 

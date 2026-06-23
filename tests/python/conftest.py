@@ -8,11 +8,50 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# The feature-development example's ``feature_request`` param is required and has
+# no default, so any run created from it must supply a value. Lifecycle tests use
+# the example as a representative multi-node workflow and do not care about the
+# request text; this shared value keeps those runs valid.
+EXAMPLE_PARAMS = {"feature_request": "Add a dark mode toggle"}
+
+
+@pytest.fixture(autouse=True)
+def _reap_background_drive_threads():
+    """Stop any ``tools.start_workflow`` background drive thread at test
+    teardown. Those threads loop on the process-global ``HERMES_HOME`` (which
+    each test re-points via monkeypatch), so a thread that outlived its test
+    would spin into the NEXT test's databases — the source of intermittent
+    "database is locked" / "disk image is malformed" failures in unrelated
+    later tests. Setting the cooperative stop wakes the interruptible pause so
+    the threads exit, then we join them before the next test rebinds the env.
+    Import lazily and fail open: tests that never import ``tools`` are unaffected.
+    """
+    yield
+    try:
+        from hermes_workflows import tools
+    except ModuleNotFoundError:
+        return
+    tools._drive_stop.set()
+    for thread in threading.enumerate():
+        if thread.name.startswith(("hw-drive-", "hw-resume-")):
+            thread.join(timeout=10)
+    lingering = [
+        thread.name
+        for thread in threading.enumerate()
+        if thread.name.startswith(("hw-drive-", "hw-resume-")) and thread.is_alive()
+    ]
+    if lingering:
+        raise RuntimeError(f"background workflow threads did not stop: {lingering}")
+    tools._drive_stop.clear()
 
 
 def sibling_spec(tmp_path: Path, spec: Path, suffix: str = "b") -> Path:

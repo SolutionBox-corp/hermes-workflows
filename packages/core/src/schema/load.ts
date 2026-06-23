@@ -149,6 +149,17 @@ function parseParam(value: unknown, index: number): WorkflowParam {
     if (typeof value["optional"] !== "boolean") fail(`params[${index}].optional must be a boolean`);
     param.optional = value["optional"];
   }
+  // `required` is the explicit inverse alias of `optional` (so a template can
+  // read `required: true` rather than rely on the absence of `optional`). It
+  // maps onto the single `optional` source the engine checks; declaring both is
+  // a contradiction and fails at load.
+  if (value["required"] !== undefined) {
+    if (typeof value["required"] !== "boolean") fail(`params[${index}].required must be a boolean`);
+    if (value["optional"] !== undefined) {
+      fail(`params[${index}] declares both optional and required — keep one`);
+    }
+    param.optional = !value["required"];
+  }
   if (value["strict"] !== undefined) {
     if (typeof value["strict"] !== "boolean") fail(`params[${index}].strict must be a boolean`);
     param.strict = value["strict"];
@@ -403,6 +414,13 @@ function parseAgentTask(value: Rec, base: { id: string }, id: string): AgentTask
   if (value["sequential"] !== undefined) {
     if (typeof value["sequential"] !== "boolean") fail(`node '${id}'.sequential must be a boolean`);
     node.sequential = value["sequential"];
+  }
+  if (value["stack"] !== undefined) {
+    if (typeof value["stack"] !== "boolean") fail(`node '${id}'.stack must be a boolean`);
+    node.stack = value["stack"];
+  }
+  if (value["branch"] !== undefined) {
+    node.branch = str(value["branch"], `node '${id}'.branch`);
   }
   if (value["notify_completion"] !== undefined) {
     if (typeof value["notify_completion"] !== "boolean") {

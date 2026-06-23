@@ -21,7 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from . import cli_bridge, notifications, telemetry, wait
+from . import cli_bridge, notifications, resume as resume_mod, telemetry, wait
+from .bridge import worktree
 from .executor import CompositeExecutor, NodeExecutor
 from .resolve import UnresolvedInput, resolve_input_mapping, resolve_params, resolve_ref
 
@@ -30,6 +31,13 @@ from .resolve import UnresolvedInput, resolve_input_mapping, resolve_params, res
 ACTIVE_RUN_STATUSES = frozenset({"created", "running", "waiting"})
 _ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 REVIEW_OPTIONS = frozenset({"approved", "rejected", "needs_changes"})
+
+
+class ResumeError(ValueError):
+    """A resume was refused for an operator-facing reason (the run is still
+    active, the live spec drifted structurally, or there is no single failed
+    node to resume). A ``ValueError`` so the CLI surfaces it as a clean
+    ``SystemExit`` like the other operator verbs."""
 
 # Terminal run statuses that warrant a single run-lifecycle notice.
 _TERMINAL_STATUSES = frozenset({"completed", "failed"})
@@ -371,6 +379,106 @@ class Engine:
             )
         return self.advance(spec_path, run_id)
 
+    def _spec_path_for_run(self, spec_roots: Sequence[str], run: dict) -> str:
+        """Resolve a run's spec file by workflow id across ``spec_roots``.
+        Raises ``ValueError`` when no spec matches (clean operator error)."""
+        specs = self._core(["list-specs", "--roots", ",".join(spec_roots)])
+        spec_path = next(
+            (spec["path"] for spec in specs if spec["id"] == run["workflow_id"]), None
+        )
+        if spec_path is None:
+            raise ValueError(
+                f"no workflow spec for '{run['workflow_id']}' (run '{run['run_id']}') in roots"
+            )
+        return spec_path
+
+    def resume_reset(
+        self,
+        spec_roots: Sequence[str],
+        run_id: str,
+        *,
+        node: Optional[str] = None,
+        reset_all: bool = False,
+    ) -> tuple[dict, str]:
+        """The validate-and-reset half of :meth:`resume`, WITHOUT advancing —
+        for callers (the dashboard) that must return before the first node
+        executes and drive the run forward in the background.
+
+        Refuses (``ResumeError``) when the run is still active, when the live
+        spec drifted structurally from the run's persisted nodes, and — for the
+        default (bare) resume — when there is not exactly one failed node.
+        Otherwise resets the target via the core ``run-retry``: the single
+        failed node (bare), an explicit ``node``, or the whole graph
+        (``reset_all``). Returns ``(reset_run, spec_path)``. The core's
+        single-flight (``ActiveRunExistsError``) and non-failed-node
+        (``RetryError``) refusals propagate as ``CoreBridgeError`` for the
+        caller to surface."""
+        run = self._load(run_id)
+        if run is None:
+            raise ValueError(f"unknown run '{run_id}'")
+        status = run.get("status")
+        # Only a terminal-or-failed run is resumable; an active run already has a
+        # tick driving it, so resume is a refusal (not a no-op that looks like a
+        # restart).
+        if status in ACTIVE_RUN_STATUSES:
+            raise ResumeError(
+                f"run '{run_id}' is {status}, not resumable — it is still active and "
+                f"advancing. Only a failed or otherwise terminal run can be resumed."
+            )
+        spec_path = self._spec_path_for_run(spec_roots, run)
+        # Spec-drift guard: resume advances under the LIVE spec, so a structural
+        # change to the node set since the run started would walk into a graph the
+        # run was never planned against. Refuse loudly; a same-node-set edit is fine.
+        detail = self._core(
+            ["spec-get", "--roots", ",".join(spec_roots), "--id", run["workflow_id"]]
+        )
+        drift = resume_mod.structural_drift(run, detail)
+        if drift is not None:
+            raise ResumeError(drift)
+        # Resolve the reset target. Bare resume (no node, not --all) resumes THE
+        # failed node; refuse when zero or many so the operator chooses explicitly.
+        target = node
+        if not reset_all and target is None:
+            failed = sorted(
+                nid for nid, n in run["nodes"].items() if n.get("status") == "failed"
+            )
+            if not failed:
+                raise ResumeError(
+                    f"run '{run_id}' has no failed node to resume. If you mean to "
+                    f"restart it from scratch, use --all."
+                )
+            if len(failed) > 1:
+                raise ResumeError(
+                    f"run '{run_id}' has multiple failed nodes {failed}; choose one "
+                    f"with --node <id>, or restart the whole run with --all."
+                )
+            target = failed[0]
+        retry_args = ["run-retry", "--db", self.db_path, "--id", run_id]
+        if not reset_all and target is not None:
+            retry_args += ["--node", target]
+        reset = self._core(retry_args)
+        return reset, spec_path
+
+    def resume(
+        self,
+        spec_roots: Sequence[str],
+        run_id: str,
+        *,
+        node: Optional[str] = None,
+        reset_all: bool = False,
+    ) -> dict:
+        """Resume a stalled/failed run from where it died: reset the failed node
+        (or an explicit ``node``, or the whole graph with ``reset_all``) via the
+        core ``run-retry``, then advance ONE step under the LIVE spec — the same
+        cycle :meth:`run` uses after create. The completed prefix and its node
+        outputs are kept; the reset node re-runs against the current spec, so a
+        just-applied fix to its prompt / timeout / config takes effect. The CLI
+        arms the tick afterwards so it advances to completion."""
+        _reset, spec_path = self.resume_reset(
+            spec_roots, run_id, node=node, reset_all=reset_all
+        )
+        return self.advance(spec_path, run_id)
+
     def advance(self, spec_path: str, run_id: str) -> dict:
         """Advance a run one step, then - when inline mode is enabled and the
         step it just scheduled is inline-eligible (script-only, settled
@@ -472,8 +580,19 @@ class Engine:
             if all(terminal):
                 batch_failed = any(c.outcome == "failure" for c in completions)
                 batch_outputs = [c.output for c in completions if c.output is not None]
+                # Commit barrier: a stacked card just finished, so advance the
+                # shared release branch to include its commits BEFORE the next
+                # card is anchored (so the next worktree bases on the new tip).
+                # This also runs for the final card, so the branch ends carrying
+                # every card's work.
+                release = self._release_context(executor, run, task_params.get(node_id) or {})
+                if release is not None and not batch_failed:
+                    for handle in handles:
+                        worktree.commit_barrier(release[0], release[1], handle)
                 seq_state = node.get("adopt_seq")
-                if seq_state and seq_state.get("pending"):
+                if seq_state and seq_state.get("pending") and not (
+                    release is not None and batch_failed
+                ):
                     # Sequential adopt: this card is terminal but more remain.
                     # Stash its result, promote the next card on the shared branch,
                     # and keep the node active rather than settling. `pending` is
@@ -487,6 +606,15 @@ class Engine:
                         if adopt is None:
                             raise RuntimeError(
                                 "sequential adopt requires a Kanban-backed (project) scope"
+                            )
+                        if release is not None:
+                            # Re-anchor the next card onto the shared branch's now
+                            # advanced tip (it includes the card that just finished).
+                            worktree.stamp_release_worktree(
+                                _board_conn(executor),
+                                next_id,
+                                repo_root=release[0],
+                                branch=release[1],
                             )
                         handle = adopt(next_id, assignee=seq_state.get("assignee") or "")
                     except Exception as exc:  # noqa: BLE001 - fail closed, never wedge the tick
@@ -1004,6 +1132,22 @@ class Engine:
             f"choice must emit the chosen ids in a ```task_ids block."
         )
 
+    def _release_context(
+        self, executor: NodeExecutor, run: dict, params: dict
+    ) -> Optional[tuple[Path, str]]:
+        """The (release working tree, shared branch) for a ``stack`` adopt node,
+        or None when the node does not stack. Resolved fresh each tick from the
+        node's static params (workdir/branch) — these are not persisted on the
+        node, but they derive the same context deterministically across ticks."""
+        if not params.get("stack"):
+            return None
+        conn = _board_conn(executor)
+        if conn is None:
+            raise ValueError("stacked adopt requires a Kanban-backed (project) scope")
+        workdir = resolve_params(params.get("workdir") or "", run.get("params")) or None
+        branch_param = resolve_params(params.get("branch") or "", run.get("params")) or None
+        return worktree.resolve_release_context(conn, workdir=workdir, branch=branch_param)
+
     def _adopt_cards(
         self, executor: NodeExecutor, run: dict, node_id: str, params: dict, subscribe_cards: bool = True
     ) -> None:
@@ -1049,14 +1193,29 @@ class Engine:
             scope_links = getattr(executor, "scope_links", None)
             links = scope_links(drivable) if scope_links else []
             ordered = _topological_order(drivable, links)
+            # Stacking re-anchors each driven card onto a shared release branch so
+            # card N builds on cards 1..N-1 (the release flow). The context is
+            # re-resolved each tick from the node's static params (not persisted).
+            conn = _board_conn(executor)
+            release = self._release_context(executor, run, params)
             # Sequential is meaningful only for more than one card: promote the
             # first now and queue the rest; the poll loop promotes N+1 once N is
             # terminal, so workers build on prior committed work on one branch.
-            sequential = (sequential or bool(links)) and len(ordered) > 1
+            # Stacking forces it (each card must commit before the next anchors on
+            # the advanced tip); internal dependency links force it too.
+            sequential = (sequential or bool(links) or release is not None) and len(ordered) > 1
+
+            def _drive(task_id: str) -> str:
+                if release is not None:
+                    worktree.stamp_release_worktree(
+                        conn, task_id, repo_root=release[0], branch=release[1]
+                    )
+                return adopt(task_id, assignee=assignee)
+
             if sequential:
-                driven = [adopt(ordered[0], assignee=assignee)]
+                driven = [_drive(ordered[0])]
             else:
-                driven = [adopt(task_id, assignee=assignee) for task_id in ordered]
+                driven = [_drive(task_id) for task_id in ordered]
         except (UnresolvedInput, ValueError) as exc:
             node["status"] = "completed"
             node["outcome"] = "failure"

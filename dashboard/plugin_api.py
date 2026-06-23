@@ -5,6 +5,7 @@ Graph editing remains human-only via CLI (the visual editor is a later phase).""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -239,6 +240,25 @@ async def export_workflow(workflow_id: str) -> dict:
     with open(path, encoding="utf-8") as handle:
         body = handle.read()
     return {"id": workflow_id, "filename": f"{workflow_id}.workflow.yaml", "yaml": body}
+
+
+@router.get("/workflows/{workflow_id}/export-template")
+async def export_workflow_template(workflow_id: str) -> dict:
+    """Export the workflow "as a template": decouple installation-specific
+    bindings into free-form ``${...}`` placeholders and ship an AI-authored
+    adaptation guide. Returns a JSON envelope with BOTH artifacts' contents
+    (``yaml`` + ``md``) so they travel over the host's JSON-only channel. The
+    bundle is cached on (workflow_id, spec_sha, template_format,
+    generator_version); a repeat export of the unchanged version is served from
+    cache with no model call. ``404`` if the workflow is absent."""
+    from hermes_workflows import cli_bridge, template_export
+
+    try:
+        return await asyncio.to_thread(template_export.export, workflow_id)
+    except cli_bridge.CoreBridgeError as exc:
+        if exc.kind == "NotFoundError":
+            raise HTTPException(status_code=404, detail="workflow not found") from exc
+        raise HTTPException(status_code=500, detail="failed to export template") from exc
 
 
 @router.get("/runs")
@@ -483,14 +503,40 @@ async def cancel_run(run_id: str) -> dict:
 
 @router.post("/runs/{run_id}/retry")
 async def retry_run(run_id: str, payload: dict = Body(default={})) -> dict:
-    from hermes_workflows import cli_bridge, config
+    """Resume a stalled/failed run: reset the target via the core ``run-retry``,
+    then ADVANCE it under the LIVE spec (a just-applied fix to the failed node's
+    prompt/timeout/config takes effect on resume). Non-blocking — the reset
+    state returns immediately and a background thread drives the run forward
+    (mirrors the start route). ``node_id`` resumes that explicit node; its
+    absence resets the whole graph (full restart). A structural spec drift
+    (a node added/removed/renamed since the run started) is refused (409)."""
+    from hermes_workflows import cli_bridge, config, tools
+    from hermes_workflows.bridge import cron
+    from hermes_workflows.cli import build_engine
+    from hermes_workflows.engine import ResumeError
 
-    argv = [*config.core_cli(), "run-retry", "--db", str(config.runs_db_path()), "--id", run_id]
     node = payload.get("node_id")
-    if node:
-        argv += ["--node", node]
+    if node is not None:
+        if not isinstance(node, str) or not node.strip():
+            raise HTTPException(status_code=400, detail="node_id must be a non-empty string")
+        node = node.strip()
     try:
-        return cli_bridge.invoke(argv)
+        return tools.resume_workflow(
+            run_id,
+            engine=build_engine(),
+            roots=config.spec_roots(),
+            node=node or None,
+            # No explicit node → full restart (the historical /retry behaviour).
+            reset_all=not node,
+            ensure_tick=cron.ensure_workflow_tick,
+        )
+    except ResumeError as exc:
+        # Spec drift / not-resumable / ambiguous failed node: a conflict with the
+        # current world, not a malformed request.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        # Unknown run / unresolvable spec.
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except cli_bridge.CoreBridgeError as exc:
         if exc.kind == "NotFoundError":
             raise HTTPException(status_code=404, detail=exc.detail) from exc
@@ -499,7 +545,7 @@ async def retry_run(run_id: str, payload: dict = Body(default={})) -> dict:
         # Single-flight: reviving this run would sit next to an active sibling.
         if exc.kind == "ActiveRunExistsError":
             raise HTTPException(status_code=409, detail=exc.detail) from exc
-        raise HTTPException(status_code=500, detail="failed to retry run") from exc
+        raise HTTPException(status_code=500, detail="failed to resume run") from exc
 
 
 @router.get("/schedules")

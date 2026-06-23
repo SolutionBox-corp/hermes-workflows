@@ -18,6 +18,8 @@ from fastapi.testclient import TestClient
 ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_API = ROOT / "dashboard" / "plugin_api.py"
 SPEC = ROOT / "examples" / "feature-development.workflow.yaml"
+# feature-development requires a feature_request param (no default).
+_RUN_BODY = {"params": {"feature_request": "Add a dark mode toggle"}}
 
 
 def _load_router():
@@ -41,6 +43,33 @@ _SCRIPT_SPEC = {
 }
 
 
+_RESUMABLE_SPEC = """\
+id: resumable-dash
+name: Resumable Dash
+version: 1
+scope:
+  type: project
+  projects: [demo]
+trigger: { type: manual }
+defaults: { profile: eng }
+nodes:
+  - id: a
+    type: agent_task
+    title: A
+    prompt: "Do A."
+  - id: b
+    type: agent_task
+    title: B
+    prompt: "Do B ORIGINAL."
+  - id: done
+    type: finish
+    outcome: success
+edges:
+  - { from: a, to: b }
+  - { from: b, to: done }
+"""
+
+
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     home = tmp_path / "home"
@@ -48,6 +77,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     global_dir.mkdir(parents=True)
     shutil.copy(SPEC, global_dir / "feature-development.workflow.yaml")
     (global_dir / "scripts-only.workflow.json").write_text(json.dumps(_SCRIPT_SPEC))
+    (global_dir / "resumable-dash.workflow.yaml").write_text(_RESUMABLE_SPEC)
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_KANBAN_DB", str(tmp_path / "kanban.db"))
 
@@ -56,12 +86,58 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app)
 
 
+def _resumable_spec_path() -> Path:
+    import os
+
+    return Path(os.environ["HERMES_HOME"]) / "workflows" / "global" / "resumable-dash.workflow.yaml"
+
+
+def _fail_resumable_run(client: TestClient) -> str:
+    """Create a resumable-dash run and craft a 'b failed' terminal state in the
+    runs db, returning its run id. Created via the engine (not the HTTP run
+    route) so no background drive races with the crafted state."""
+    from hermes_workflows.cli import _spec_path_for_workflow, build_engine
+
+    engine = build_engine()
+    path = _spec_path_for_workflow(engine, "resumable-dash")
+    run_id = "resumable-dash-failed"
+    engine.create(path, run_id, project_id="demo")
+    run = engine.status(run_id)
+    run["nodes"]["a"]["status"] = "completed"
+    run["nodes"]["a"]["outcome"] = "success"
+    run["nodes"]["a"]["seq"] = 1
+    run["nodes"]["a"]["output"] = "A DONE"
+    run["nodes"]["b"]["status"] = "failed"
+    run["nodes"]["b"]["outcome"] = "failure"
+    run["nodes"]["b"]["seq"] = 2
+    run["status"] = "failed"
+    engine._save(run)
+    return run_id
+
+
+def _active_resumable_run(client: TestClient) -> str:
+    """Create a resumable-dash run left ACTIVE (entry node scheduled, run
+    running) directly in the runs db — no background drive thread."""
+    from hermes_workflows.cli import _spec_path_for_workflow, build_engine
+
+    engine = build_engine()
+    path = _spec_path_for_workflow(engine, "resumable-dash")
+    run_id = "resumable-dash-active"
+    engine.create(path, run_id, project_id="demo")
+    run = engine.status(run_id)
+    run["nodes"]["a"]["status"] = "scheduled"
+    run["nodes"]["a"]["hermes_task_id"] = "t_fake"
+    run["status"] = "running"
+    engine._save(run)
+    return run_id
+
+
 def _start_run(client: TestClient) -> str:
     """Start a run and wait for its background first advance, restoring the
     post-start invariant the assertions below rely on (entry node scheduled)."""
     import time
 
-    resp = client.post("/workflows/feature-development/run")
+    resp = client.post("/workflows/feature-development/run", json=_RUN_BODY)
     assert resp.status_code == 200, resp.text
     run_id = resp.json()["run_id"]
     deadline = time.monotonic() + 10
@@ -89,8 +165,8 @@ def test_run_with_non_object_params_is_400(client: TestClient) -> None:
 
 
 def test_run_with_unknown_param_is_400(client: TestClient) -> None:
-    # feature-development declares no params, so any supplied name is rejected by
-    # the core at run-create and surfaced as a 400 (a caller error, not a 500).
+    # feature-development declares feature_request, so an unknown name is rejected
+    # by the core at run-create and surfaced as a 400 (a caller error, not a 500).
     resp = client.post("/workflows/feature-development/run", json={"params": {"nope": "x"}})
     assert resp.status_code == 400
     assert "unknown param" in resp.json()["detail"]
@@ -184,21 +260,72 @@ def test_cancel_unknown_run_is_404(client: TestClient) -> None:
     assert client.post("/runs/ghost/cancel").status_code == 404
 
 
-def test_retry_run_resets_it(client: TestClient) -> None:
-    run_id = _start_run(client)
-    resp = client.post(f"/runs/{run_id}/retry")
+def test_retry_run_restarts_a_terminal_run(client: TestClient) -> None:
+    run_id = _fail_resumable_run(client)
+    resp = client.post(f"/runs/{run_id}/retry")  # no node -> full restart
     assert resp.status_code == 200
-    assert resp.json()["status"] == "created"
+    # Whole-graph reset, then advanced under the live spec: the entry node is
+    # re-scheduled and the run is running again.
+    body = resp.json()
+    assert body["status"] == "running"
+    assert body["nodes"]["a"]["status"] == "scheduled"
+
+
+def test_retry_active_run_is_409(client: TestClient) -> None:
+    """Resume refuses a still-active run (it already has a tick advancing it)."""
+    run_id = _active_resumable_run(client)
+    resp = client.post(f"/runs/{run_id}/retry")
+    assert resp.status_code == 409, resp.text
+    assert "resum" in resp.json()["detail"].lower()
 
 
 def test_retry_unknown_run_is_404(client: TestClient) -> None:
     assert client.post("/runs/ghost/retry").status_code == 404
 
 
+def test_resume_failed_node_reschedules_it(client: TestClient) -> None:
+    """A failed run resumes: the failed node is reset and re-scheduled under the
+    live spec (synchronous advance), keeping the completed prefix."""
+    run_id = _fail_resumable_run(client)
+    resp = client.post(f"/runs/{run_id}/retry", json={"node_id": "b"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "running"
+    assert body["nodes"]["b"]["status"] == "scheduled"
+    assert body["nodes"]["a"]["status"] == "completed"  # prefix kept
+    assert body["nodes"]["a"]["output"] == "A DONE"
+
+
+def test_resume_rejects_invalid_node_id_payload(client: TestClient) -> None:
+    run_id = _fail_resumable_run(client)
+    for payload in ({"node_id": ""}, {"node_id": "   "}, {"node_id": ["b"]}):
+        resp = client.post(f"/runs/{run_id}/retry", json=payload)
+        assert resp.status_code == 400, resp.text
+        assert "node_id" in resp.json()["detail"]
+
+
+
+def test_resume_refuses_structural_spec_drift_409(client: TestClient) -> None:
+    run_id = _fail_resumable_run(client)
+    # Add a node to the live spec since the run started -> node-set drift.
+    drifted = _RESUMABLE_SPEC.replace(
+        "  - id: done\n",
+        "  - id: extra\n    type: agent_task\n    title: Extra\n    prompt: \"X.\"\n  - id: done\n",
+    ).replace(
+        "  - { from: b, to: done }\n",
+        "  - { from: b, to: extra }\n  - { from: extra, to: done }\n",
+    )
+    _resumable_spec_path().write_text(drifted)
+
+    resp = client.post(f"/runs/{run_id}/retry", json={"node_id": "b"})
+    assert resp.status_code == 409, resp.text
+    assert "drift" in resp.json()["detail"].lower()
+
+
 def test_retry_non_failed_node_is_400(client: TestClient) -> None:
-    run_id = _start_run(client)
-    # 'plan' is scheduled (the entry node), not failed -> RetryError -> 400.
-    resp = client.post(f"/runs/{run_id}/retry", json={"node_id": "plan"})
+    run_id = _fail_resumable_run(client)
+    # 'a' is completed, not failed -> RetryError -> 400.
+    resp = client.post(f"/runs/{run_id}/retry", json={"node_id": "a"})
     assert resp.status_code == 400
 
 
@@ -211,7 +338,7 @@ def test_script_workflow_is_409_when_scripts_disabled(client: TestClient) -> Non
 
 def test_non_script_workflow_runs_when_scripts_disabled(client: TestClient) -> None:
     # The gate only affects workflows that contain script nodes.
-    resp = client.post("/workflows/feature-development/run")
+    resp = client.post("/workflows/feature-development/run", json=_RUN_BODY)
     assert resp.status_code == 200, resp.text
 
 
@@ -228,7 +355,7 @@ def test_second_start_is_409_naming_the_active_run(client: TestClient) -> None:
     """Single-flight: one workflow may have at most one active run. The refusal
     is explicit — 409 with the blocking run's id in the detail."""
     run_id = _start_run(client)
-    resp = client.post("/workflows/feature-development/run")
+    resp = client.post("/workflows/feature-development/run", json=_RUN_BODY)
     assert resp.status_code == 409, resp.text
     assert run_id in resp.json()["detail"]
 
@@ -236,7 +363,7 @@ def test_second_start_is_409_naming_the_active_run(client: TestClient) -> None:
 def test_start_is_allowed_again_after_the_active_run_settles(client: TestClient) -> None:
     run_id = _start_run(client)
     client.post(f"/runs/{run_id}/cancel")
-    resp = client.post("/workflows/feature-development/run")
+    resp = client.post("/workflows/feature-development/run", json=_RUN_BODY)
     assert resp.status_code == 200, resp.text
 
 
@@ -331,7 +458,7 @@ def test_run_start_is_non_blocking_and_arms_the_tick(
     monkeypatch.setattr(cj, "JOBS_FILE", cron_dir / "jobs.json")
     monkeypatch.setattr(cj, "OUTPUT_DIR", cron_dir / "output")
 
-    resp = client.post("/workflows/feature-development/run")
+    resp = client.post("/workflows/feature-development/run", json=_RUN_BODY)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "created"

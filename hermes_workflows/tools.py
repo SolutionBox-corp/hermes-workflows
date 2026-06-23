@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
 from typing import Any, Callable, Optional, Sequence
 
 from . import cli_bridge
@@ -96,6 +95,14 @@ _DRIVEABLE_STATUSES = frozenset({"created", "running"})
 # long kanban-backed run does not hammer the core CLI.
 DRIVE_INTERVAL_SECONDS = 2.0
 
+# A cooperative stop for the background drive loop. NEVER set in production (the
+# loop ends on its own when the run settles or parks). It exists so a test
+# harness can reap lingering drive threads at teardown: a thread that read the
+# process-global HERMES_HOME would otherwise spin into the next test's
+# databases. Using ``wait()`` (not ``sleep()``) for the pause makes it
+# interruptible, so a set event ends the drive promptly.
+_drive_stop = threading.Event()
+
 
 def start_workflow(
     workflow_id: str,
@@ -135,11 +142,14 @@ def start_workflow(
     def _drive() -> None:
         try:
             background_engine = engine_factory()
-            while True:
+            while not _drive_stop.is_set():
                 run = background_engine.advance(path, run_id)
                 if run.get("status") not in _DRIVEABLE_STATUSES:
                     return
-                time.sleep(drive_interval_seconds)
+                # Interruptible pause: returns True the moment the stop is set
+                # (test teardown), else times out after the interval and loops.
+                if _drive_stop.wait(drive_interval_seconds):
+                    return
         except Exception as exc:
             # Surfaced in the service log; the armed tick keeps advancing the
             # run, so it is delayed, not stranded.
@@ -150,6 +160,35 @@ def start_workflow(
 
     threading.Thread(target=_drive, name=f"hw-drive-{run_id}", daemon=True).start()
     return {"run_id": run_id, "status": created["status"]}
+
+
+def resume_workflow(
+    run_id: str,
+    *,
+    engine: Any,
+    roots: Sequence[str],
+    node: Optional[str] = None,
+    reset_all: bool = False,
+    ensure_tick: Optional[Callable[[], Any]] = None,
+) -> dict:
+    """Resume a stalled/failed run for the dashboard route: drift-guard and
+    reset the failed node (or the whole graph), advance ONE step under the live
+    spec, then arm the tick to carry it to completion. Returns the advanced run
+    state.
+
+    Synchronous in the handler — the same shape as the ``review`` route
+    (``decide_review`` advances in-line) and the CLI ``resume``. ``resume``'s
+    ``ResumeError`` / ``CoreBridgeError`` refusals (active run, spec drift,
+    single-flight, non-failed node) propagate for the route to map to a status
+    code."""
+    run = engine.resume(roots, run_id, node=node, reset_all=reset_all)
+    # Like the CLI: a resumed run that is still active needs future advances, so
+    # arm the singleton tick (it tears itself down once idle).
+    from .engine import ACTIVE_RUN_STATUSES
+
+    if ensure_tick is not None and run.get("status") in ACTIVE_RUN_STATUSES:
+        ensure_tick()
+    return run
 
 
 def run_workflow(
