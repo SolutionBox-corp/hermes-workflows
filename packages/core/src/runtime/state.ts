@@ -48,6 +48,7 @@ export function createRunState(
   origin?: string,
   input?: string,
   params?: Record<string, ParamValue>,
+  workflowPath?: string,
 ): RunState {
   const nodes: Record<string, NodeRunState> = {};
   for (const node of workflow.nodes) {
@@ -60,6 +61,7 @@ export function createRunState(
     status: "created",
     nodes,
   };
+  if (workflowPath !== undefined && workflowPath !== "") run.workflow_path = workflowPath;
   if (projectId !== undefined) run.project_id = projectId;
   if (origin !== undefined && origin !== "") run.origin = origin;
   if (input !== undefined && input !== "") run.input = input;

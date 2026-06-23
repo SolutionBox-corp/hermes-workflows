@@ -216,6 +216,17 @@ class Engine:
             raise ValueError(f"unknown run {run_id}")
         return run
 
+    @staticmethod
+    def _stored_spec_path(run: dict) -> Optional[str]:
+        """The spec path persisted with the run, when it still resolves to a file
+        on disk. Returns ``None`` for an unset/blank path or one whose file has
+        since moved or been deleted, so callers fall back to resolving the spec
+        by workflow id from the configured roots."""
+        path = run.get("workflow_path")
+        if isinstance(path, str) and path.strip() != "" and Path(path).is_file():
+            return path
+        return None
+
     def active_runs(self) -> list[dict]:
         """Every run still needing advances (created / running / waiting). Used by
         the chat-reply gate router to find a run awaiting a decision."""
@@ -344,7 +355,7 @@ class Engine:
 
         advanced: list[dict] = []
         for run in runs:
-            spec_path = path_by_id.get(run["workflow_id"])
+            spec_path = self._stored_spec_path(run) or path_by_id.get(run["workflow_id"])
             if spec_path is None:
                 continue
             try:
@@ -369,6 +380,9 @@ class Engine:
         run = self._load(run_id)
         if run is None:
             raise ValueError(f"unknown run '{run_id}'")
+        stored = self._stored_spec_path(run)
+        if stored is not None:
+            return self.advance(stored, run_id)
         specs = self._core(["list-specs", "--roots", ",".join(spec_roots)])
         spec_path = next(
             (spec["path"] for spec in specs if spec["id"] == run["workflow_id"]), None
