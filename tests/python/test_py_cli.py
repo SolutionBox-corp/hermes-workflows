@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 kb = pytest.importorskip("hermes_cli.kanban_db")
-cj = pytest.importorskip("cron.jobs")
+pytest.importorskip("cron.jobs")
 
 from conftest import EXAMPLE_PARAMS
 from hermes_workflows import cli
@@ -28,13 +28,9 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     shutil.copy(SPEC, h / "workflows" / "global" / "feature-development.workflow.yaml")
     monkeypatch.setenv("HERMES_HOME", str(h))
     monkeypatch.setenv("HERMES_KANBAN_DB", str(tmp_path / "kanban.db"))
-    # Redirect cron writes so the tick (advance-all -> sync_workflow_tick) never
-    # touches the real ~/.hermes/cron.
-    cron_dir = tmp_path / "cron"
-    cron_dir.mkdir()
-    monkeypatch.setattr(cj, "CRON_DIR", cron_dir)
-    monkeypatch.setattr(cj, "JOBS_FILE", cron_dir / "jobs.json")
-    monkeypatch.setattr(cj, "OUTPUT_DIR", cron_dir / "output")
+    # The cron store is redirected to a tmp dir by the autouse
+    # _sandbox_cron_store fixture in conftest, so the tick never touches the
+    # real ~/.hermes/cron.
     return h
 
 
@@ -154,11 +150,6 @@ def _repo_local_home(
         shutil.copy(SPEC, global_dir / "feature-development.workflow.yaml")
     monkeypatch.setenv("HERMES_HOME", str(h))
     monkeypatch.setenv("HERMES_KANBAN_DB", str(tmp_path / "kanban.db"))
-    cron_dir = tmp_path / "cron"
-    cron_dir.mkdir()
-    monkeypatch.setattr(cj, "CRON_DIR", cron_dir)
-    monkeypatch.setattr(cj, "JOBS_FILE", cron_dir / "jobs.json")
-    monkeypatch.setattr(cj, "OUTPUT_DIR", cron_dir / "output")
 
     project = tmp_path / "repo"
     local_dir = project / ".hermes" / "workflows"
@@ -186,6 +177,22 @@ def test_run_discovers_repo_local_workflow_and_persists_its_path(
 
     tick = _invoke(capsys, "advance-all")
     assert any(r["run_id"] == run["run_id"] for r in tick["advanced"])
+
+
+def test_repo_local_spec_wins_over_a_global_id_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """When the same workflow id exists in BOTH a global root and the repo-local
+    dir, resolution must favour the repo-local copy — not silently shadow it
+    behind the global one. This is the v0.7.2 (#27) repo-local-discovery intent."""
+    project, local_dir = _repo_local_home(tmp_path, monkeypatch, seed_global=True)
+    local_spec = str(local_dir / "feature-development.workflow.yaml")
+
+    monkeypatch.chdir(project)
+    run = _invoke(
+        capsys, "run", "feature-development", "--params", json.dumps(EXAMPLE_PARAMS)
+    )
+    assert run["workflow_path"] == local_spec
 
 
 def test_advance_falls_back_to_global_when_stored_spec_is_gone(
