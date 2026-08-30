@@ -23,6 +23,8 @@ import type {
   SpecDetail,
   ValidationResult,
   WorkflowListItem,
+  ReviewDecision,
+  ReviewResult,
 } from "./types";
 
 export type FetchJSON = <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
@@ -50,6 +52,15 @@ export interface WorkflowsApi {
   getRun(id: string): Promise<RunState>;
   cancelRun(id: string): Promise<RunState>;
   retryRun(id: string, node?: string): Promise<RunState>;
+  /** Resolve a human_review gate. `note` is the reviewer's free text,
+   *  surfaced downstream as `{{nodes.<gate>.review_note}}` — the only thing
+   *  that makes a `needs_changes` loop differ from a re-run. */
+  reviewRun(
+    id: string,
+    nodeId: string,
+    decision: ReviewDecision,
+    note?: string,
+  ): Promise<ReviewResult>;
   listSchedules(): Promise<ScheduleListItem[]>;
   pauseSchedule(id: string): Promise<unknown>;
   resumeSchedule(id: string): Promise<unknown>;
@@ -159,6 +170,17 @@ export function createApiClient(fetchJSON: FetchJSON): WorkflowsApi {
 
     retryRun(id, node) {
       return postJson<RunState>(`${run(id)}/retry`, node === undefined ? {} : { node_id: node });
+    },
+
+    reviewRun(id, nodeId, decision, note) {
+      // A blank textarea is not a note. Sending "" would record a reviewer who
+      // deliberately said nothing, which reads differently downstream.
+      const trimmed = note?.trim();
+      return postJson<ReviewResult>(`${run(id)}/review`, {
+        node_id: nodeId,
+        decision,
+        ...(trimmed ? { note: trimmed } : {}),
+      });
     },
 
     async listSchedules() {

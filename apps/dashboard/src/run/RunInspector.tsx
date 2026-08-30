@@ -4,7 +4,7 @@ import { Background, Controls, ReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getApiClient } from "../host";
 import type { WorkflowsApi } from "../api/client";
-import type { SpecDetail } from "../api/types";
+import type { ReviewDecision, SpecDetail } from "../api/types";
 import { applyRunStatus, isTerminalRun } from "./runView";
 import { CANVAS_NODE_TYPES } from "./canvasNodeTypes";
 import { errorMessage, RUN_POLL_MS, useRunPolling } from "./useRunPolling";
@@ -35,6 +35,9 @@ export function RunInspector({
   const [actionError, setActionError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [log, setLog] = useState<LoggedRunEvent[]>([]);
+  // The reviewer's note for the gate currently open in the modal.
+  const [reviewNote, setReviewNote] = useState<string>("");
+  const [reviewPending, setReviewPending] = useState(false);
   const slots = useHeaderSlots();
 
   // Drop the prior run's curated log when the inspected run changes without an
@@ -86,6 +89,24 @@ export function RunInspector({
         .retryRun(runId, node)
         .then(replaceRun)
         .catch((error: unknown) => setActionError(`Retry failed: ${errorMessage(error)}`));
+    },
+    [api, runId, replaceRun],
+  );
+
+  const review = useCallback(
+    (node: string, decision: ReviewDecision, note: string) => {
+      setActionError(null);
+      setReviewPending(true);
+      api
+        .reviewRun(runId, node, decision, note)
+        .then(() => api.getRun(runId))
+        .then(replaceRun)
+        .then(() => {
+          setReviewNote("");
+          setSelectedNodeId(null);
+        })
+        .catch((error: unknown) => setActionError(`Review failed: ${errorMessage(error)}`))
+        .finally(() => setReviewPending(false));
     },
     [api, runId, replaceRun],
   );
@@ -194,9 +215,54 @@ export function RunInspector({
           ariaLabel={`Node ${selectedNodeId}`}
           className="hw-node-modal"
           onClose={() => setSelectedNodeId(null)}
-          footer={<Button onClick={() => retry(selectedNodeId)}>Retry node</Button>}
+          footer={
+            // A gate is the one node where "retry" is the wrong verb: the run is
+            // not broken, it is waiting for a person. Until this existed the
+            // dashboard could not resolve a gate at all — the endpoint and the
+            // CLI had it, the UI never called them — so a human_review node was
+            // a dead end you had to leave the browser to answer.
+            selected.status === "waiting_for_review" ? (
+              <div className="hw-review-actions">
+                <Button
+                  disabled={reviewPending}
+                  onClick={() => review(selectedNodeId, "approved", reviewNote)}
+                >
+                  Approve
+                </Button>
+                <Button
+                  disabled={reviewPending}
+                  onClick={() => review(selectedNodeId, "needs_changes", reviewNote)}
+                >
+                  Needs changes
+                </Button>
+                <Button
+                  disabled={reviewPending}
+                  onClick={() => review(selectedNodeId, "rejected", reviewNote)}
+                >
+                  Reject
+                </Button>
+              </div>
+            ) : (
+              <Button onClick={() => retry(selectedNodeId)}>Retry node</Button>
+            )
+          }
         >
           <p>Status: {selected.status}</p>
+          {selected.status === "waiting_for_review" && (
+            <label className="hw-review-note">
+              Note for the next step
+              <textarea
+                aria-label="Review note"
+                rows={3}
+                value={reviewNote}
+                disabled={reviewPending}
+                onChange={(event) => setReviewNote(event.target.value)}
+              />
+            </label>
+          )}
+          {selected.review_decision !== undefined && (
+            <p>Decision: {selected.review_decision}</p>
+          )}
           {selected.outcome !== undefined && <p>Outcome: {selected.outcome}</p>}
           {selected.output !== undefined && <pre className="hw-output">{selected.output}</pre>}
           {selected.error !== undefined && <p className="hw-error">{selected.error}</p>}

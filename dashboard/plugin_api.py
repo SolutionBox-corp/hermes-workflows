@@ -303,13 +303,28 @@ def _run_row(summary: dict) -> dict:
 
 @router.post("/runs/{run_id}/review")
 async def review_run(
-    run_id: str, node_id: str = Body(...), decision: str = Body(...)
+    run_id: str,
+    node_id: str = Body(...),
+    decision: str = Body(...),
+    note: str | None = Body(None),
 ) -> dict:
     """Resolve a human_review node and advance the run. Same channel-agnostic
-    resolution the model tool and CLI use; an invalid decision is a 400."""
+    resolution the model tool and CLI use; an invalid decision is a 400.
+
+    ``note`` is the operator's free text, surfaced downstream as
+    ``{{nodes.<gate>.review_note}}``. ``review_workflow`` has always accepted
+    one and the CLI has always sent one; this route did not, so the dashboard
+    could not. It matters most for ``needs_changes``: without the note the run
+    goes back to a step that reads the same instructions and produces the same
+    result.
+
+    A blank or whitespace-only note becomes ``None`` rather than an empty
+    string — an empty textarea means the reviewer wrote nothing, and storing
+    "" would read downstream as a reviewer who said nothing on purpose."""
     from hermes_workflows import config, tools
     from hermes_workflows.cli import build_engine
 
+    cleaned = note.strip() if isinstance(note, str) else None
     try:
         return tools.review_workflow(
             run_id,
@@ -318,6 +333,7 @@ async def review_run(
             engine=build_engine(),
             roots=config.spec_roots(),
             core_cli=config.core_cli(),
+            note=cleaned or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

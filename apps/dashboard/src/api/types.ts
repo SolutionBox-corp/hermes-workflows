@@ -221,3 +221,12 @@ export interface SettingsResponse {
   values: WorkflowSettings;
   schema: SettingsSchema;
 }
+
+/** The three resolutions a human_review node accepts. */
+export type ReviewDecision = "approved" | "rejected" | "needs_changes";
+
+export interface ReviewResult {
+  run_id: string;
+  status: string;
+  decision: ReviewDecision;
+}
