@@ -146,6 +146,52 @@ def test_the_last_completion_that_has_one_wins(tmp_path) -> None:
     assert node["record"] == {"headline": "second"}
 
 
+def test_record_telemetry_lands_on_the_node_not_in_the_record(tmp_path) -> None:
+    """Provider-reported usage renders through the telemetry block that already
+    exists, so it must move onto the node. Leaving it inside the record would
+    also mean two places claiming to hold the same numbers."""
+    engine = _engine(tmp_path)
+    node: dict = {"status": "completed"}
+
+    engine._apply_step_record(
+        node,
+        [
+            Completion(
+                settled=True,
+                outcome="success",
+                record={"headline": "ok", "telemetry": {"cost_usd": 1.49, "total_tokens": 19140}},
+            )
+        ],
+    )
+
+    assert node["telemetry"] == {"cost_usd": 1.49, "total_tokens": 19140}
+    assert "telemetry" not in node["record"]
+    assert node["record"]["headline"] == "ok"
+
+
+def test_record_telemetry_does_not_replace_observer_telemetry_wholesale(tmp_path) -> None:
+    engine = _engine(tmp_path)
+    node: dict = {"status": "completed", "telemetry": {"tool_calls": 7}}
+
+    engine._apply_step_record(
+        node,
+        [Completion(settled=True, outcome="success", record={"telemetry": {"cost_usd": 1.49}})],
+    )
+
+    assert node["telemetry"] == {"tool_calls": 7, "cost_usd": 1.49}
+
+
+def test_a_non_mapping_telemetry_field_is_ignored(tmp_path) -> None:
+    engine = _engine(tmp_path)
+    node: dict = {"status": "completed"}
+
+    engine._apply_step_record(
+        node, [Completion(settled=True, outcome="success", record={"telemetry": "nope"})]
+    )
+
+    assert "telemetry" not in node
+
+
 def test_a_completion_without_a_record_does_not_erase_an_earlier_one(tmp_path) -> None:
     engine = _engine(tmp_path)
     node: dict = {"status": "completed"}

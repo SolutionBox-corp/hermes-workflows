@@ -707,11 +707,14 @@ class Engine:
                         block_ids = _extract_task_ids_block(node["output"])
                         if block_ids:
                             node["task_ids"] = block_ids
+                    self._merge_telemetry(node)
                     # The step's own account of itself, beside its output: the
                     # diagnostics it wrote to stderr and the structured record it
-                    # declared. Rendered by the inspector, never routed on.
+                    # declared. Rendered by the inspector, never routed on. After
+                    # the sidecar merge, which assigns `telemetry` outright — a
+                    # step's self-reported provider usage is the more direct
+                    # source and must not be overwritten by it.
                     self._apply_step_record(node, completions)
-                    self._merge_telemetry(node)
                     settled_cards.extend(handles)
             elif any(c.status == "blocked" for c in completions):
                 # An underlying card is blocked (a worker ran `kanban block`, or
@@ -874,12 +877,23 @@ class Engine:
         recent attempt - the one whose artifacts are the ones on disk. A
         completion carrying neither leaves an earlier one in place rather than
         erasing it.
+
+        A `telemetry` block inside the record is MOVED onto the node: usage the
+        step read straight out of its provider's response renders through the
+        telemetry block the inspector already has, instead of a second set of
+        counters beside it. Merged key by key, so a worker-side sidecar and a
+        step's self-report can both contribute rather than one erasing the other.
         """
         for completion in completions:
             if completion.stderr:
                 node["stderr"] = completion.stderr
-            if completion.record is not None:
-                node["record"] = completion.record
+            if completion.record is None:
+                continue
+            record = dict(completion.record)
+            reported = record.pop("telemetry", None)
+            if isinstance(reported, dict):
+                node["telemetry"] = {**(node.get("telemetry") or {}), **reported}
+            node["record"] = record
 
     def _emit_trace(self, prior: dict, run: dict) -> None:
         """Derive this step's timeline by diffing the pre-step snapshot against
