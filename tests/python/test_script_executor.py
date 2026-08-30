@@ -154,3 +154,32 @@ def test_settled_handle_is_not_re_executed(tmp_path) -> None:
     again = _schedule(ex, params)
     assert first == again
     assert counter.read_text().count("x") == 1
+
+
+def test_successful_command_keeps_stderr(tmp_path) -> None:
+    """A step's diagnostics conventionally go to stderr. Discarding them on
+    success threw away exactly the context an audit of a *working* step needs."""
+    ex = _executor(tmp_path)
+    handle = _schedule(ex, {"command": "echo out; echo diag >&2", "workdir": str(tmp_path)})
+    completion = ex.poll(handle)
+    assert completion.outcome == "success"
+    assert "out" in (completion.output or "")
+    assert "diag" in (completion.stderr or "")
+
+
+def test_failing_command_keeps_both_streams(tmp_path) -> None:
+    """``output`` keeps its existing stderr-preferred meaning — a wait node reads
+    ``{{nodes.<id>.output}}`` — and ``stderr`` is added beside it, not instead."""
+    ex = _executor(tmp_path)
+    handle = _schedule(ex, {"command": "echo out; echo boom >&2; exit 1", "workdir": str(tmp_path)})
+    completion = ex.poll(handle)
+    assert completion.outcome == "failure"
+    assert completion.output == "boom"
+    assert completion.stderr == "boom"
+
+
+def test_stderr_survives_the_completion_store(tmp_path) -> None:
+    ex = _executor(tmp_path)
+    handle = _schedule(ex, {"command": "echo diag >&2", "workdir": str(tmp_path)})
+    reloaded = _executor(tmp_path).poll(handle)
+    assert "diag" in (reloaded.stderr or "")

@@ -114,10 +114,18 @@ class ScriptExecutor:
                 outcome="failure",
                 output=f"script timed out after {timeout:g}s",
             )
+        # stderr is carried on both outcomes. `output` keeps its existing
+        # meaning untouched — stdout on success, stderr-preferred detail on
+        # failure — because it is a consumed value: a `wait` node reads
+        # `{{nodes.<id>.output}}`. The new field is added beside it, never
+        # instead of it.
+        stderr = _clean(proc.stderr)
         if proc.returncode == 0:
-            return Completion(settled=True, outcome="success", output=_clean(proc.stdout))
+            return Completion(
+                settled=True, outcome="success", output=_clean(proc.stdout), stderr=stderr
+            )
         detail = proc.stderr.strip() or proc.stdout.strip()
-        return Completion(settled=True, outcome="failure", output=_clean(detail))
+        return Completion(settled=True, outcome="failure", output=_clean(detail), stderr=stderr)
 
     def _build_env(self, requested: Optional[Sequence[str]]) -> dict:
         """The command sees only vars whose names are both requested by the node

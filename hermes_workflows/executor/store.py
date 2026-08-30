@@ -28,6 +28,10 @@ class CompletionStore:
             settled=bool(data.get("settled")),
             outcome=data.get("outcome"),
             output=data.get("output"),
+            # Absent in records written before the field existed, which must
+            # still load: `.get` yields None and the completion is simply one
+            # without captured diagnostics.
+            stderr=data.get("stderr"),
             started=bool(data.get("started")),
             transient_retries=int(data.get("transient_retries") or 0),
         )
@@ -42,6 +46,7 @@ class CompletionStore:
                     "settled": completion.settled,
                     "outcome": completion.outcome,
                     "output": completion.output,
+                    "stderr": completion.stderr,
                     "started": completion.started,
                     "transient_retries": completion.transient_retries,
                 }

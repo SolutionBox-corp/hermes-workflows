@@ -13,6 +13,13 @@ class Completion:
     settled: bool
     outcome: Optional[str] = None  # "success" | "failure" | None (still running)
     output: Optional[str] = None
+    # Captured stderr, kept on BOTH outcomes. `output` alone is not the record: a
+    # script's diagnostics — paths it resolved, exit codes, setup it performed —
+    # conventionally go to stderr, and keeping them only on failure threw away
+    # exactly the context needed to audit a step that *worked*. Clipped and
+    # redacted the same way `output` is. None on backends with no separate
+    # stream, and on a timeout, where neither stream is available.
+    stderr: Optional[str] = None
     # The work has visibly begun (worker spawned / runner invoked). Lets the
     # engine show a truthful "running" instead of a stale "scheduled" while a
     # long node executes. False on backends that cannot tell.
