@@ -32,6 +32,7 @@ class CompletionStore:
             # still load: `.get` yields None and the completion is simply one
             # without captured diagnostics.
             stderr=data.get("stderr"),
+            record=data.get("record"),
             started=bool(data.get("started")),
             transient_retries=int(data.get("transient_retries") or 0),
         )
@@ -47,6 +48,7 @@ class CompletionStore:
                     "outcome": completion.outcome,
                     "output": completion.output,
                     "stderr": completion.stderr,
+                    "record": completion.record,
                     "started": completion.started,
                     "transient_retries": completion.transient_retries,
                 }

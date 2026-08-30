@@ -59,6 +59,11 @@ def build_engine() -> Engine:
             store_dir=config.script_store_dir(),
             env_allowlist=config.script_env_allowlist(),
             enabled=config.scripts_enabled,
+            # Stated rather than left to the executor's default. The default
+            # happens to resolve to the same directory, and a coincidence that
+            # two settings agree is exactly the kind of thing that drifts apart
+            # unnoticed.
+            artifacts_root=config.runs_artifacts_dir(),
         ),
         kanban_factory=kanban_factory,
         # Run-lifecycle notices: deliver through the in-process gateway's

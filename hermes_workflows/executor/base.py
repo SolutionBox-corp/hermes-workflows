@@ -20,6 +20,12 @@ class Completion:
     # redacted the same way `output` is. None on backends with no separate
     # stream, and on a timeout, where neither stream is available.
     stderr: Optional[str] = None
+    # Structured audit record a script node declared about itself on its last
+    # stdout line (see executor/envelope.py). Opaque to the engine: it is
+    # persisted and rendered, never branched on, so routing can never depend on
+    # a step's own description of itself. None for a step that declared nothing
+    # and for every backend that has no such channel.
+    record: Optional[dict] = None
     # The work has visibly begun (worker spawned / runner invoked). Lets the
     # engine show a truthful "running" instead of a stale "scheduled" while a
     # long node executes. False on backends that cannot tell.

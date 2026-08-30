@@ -23,8 +23,10 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
+from .. import artifacts
 from ..redact import redact_secrets
 from .base import Completion
+from .envelope import split_envelope
 from .store import CompletionStore, clip_output
 
 _HANDLE_PREFIX = "script:"
@@ -42,8 +44,15 @@ class ScriptExecutor:
         env_allowlist: Sequence[str] = (),
         timeout_seconds: float = 1800.0,
         enabled: Optional[Callable[[], bool]] = None,
+        artifacts_root: Optional[Path] = None,
     ) -> None:
         self.store = CompletionStore(Path(store_dir))
+        # Where the evidence a step declares is copied to. Defaults beside the
+        # completion store rather than importing config here, so the executor
+        # stays constructible in a test with nothing but a tmp directory.
+        self.artifacts_root = (
+            Path(artifacts_root) if artifacts_root is not None else Path(store_dir).parent / "runs"
+        )
         # The settings-level ceiling: a node may only see vars named here.
         self.env_allowlist = set(env_allowlist)
         self.timeout_seconds = timeout_seconds
@@ -78,7 +87,7 @@ class ScriptExecutor:
                 ),
             )
             return handle
-        completion = self._invoke(params)
+        completion = self._invoke(params, run_id=run_id, node_id=node_id)
         self.store.write(handle, completion)
         return handle
 
@@ -87,7 +96,7 @@ class ScriptExecutor:
 
     # --- internals --------------------------------------------------------
 
-    def _invoke(self, params: dict) -> Completion:
+    def _invoke(self, params: dict, *, run_id: str = "", node_id: str = "") -> Completion:
         command = params.get("command") or ""
         workdir = params.get("workdir") or None
         timeout = params.get("timeout_seconds")
@@ -120,12 +129,69 @@ class ScriptExecutor:
         # `{{nodes.<id>.output}}`. The new field is added beside it, never
         # instead of it.
         stderr = _clean(proc.stderr)
+        # Split the envelope off BEFORE anything is clipped: the clip truncates
+        # the tail, which is exactly where the envelope lives. A step that
+        # printed a lot and then declared its record would otherwise lose the
+        # record it had just written, silently.
+        stdout, record = self._record(proc.stdout or "", run_id, node_id)
         if proc.returncode == 0:
             return Completion(
-                settled=True, outcome="success", output=_clean(proc.stdout), stderr=stderr
+                settled=True,
+                outcome="success",
+                output=_clean(stdout),
+                stderr=stderr,
+                record=record,
             )
-        detail = proc.stderr.strip() or proc.stdout.strip()
-        return Completion(settled=True, outcome="failure", output=_clean(detail), stderr=stderr)
+        detail = proc.stderr.strip() or stdout.strip()
+        return Completion(
+            settled=True, outcome="failure", output=_clean(detail), stderr=stderr, record=record
+        )
+
+    def _record(self, stdout: str, run_id: str, node_id: str) -> tuple[str, Optional[dict]]:
+        """Split a step's ``hermes_node`` envelope off its stdout and bring the
+        artifacts it declared into the store.
+
+        Each declared entry names a file by an operator-side path. That path is
+        replaced in the record by the size actually kept, because the path means
+        nothing to a reader of the run and would leak the host's layout into the
+        UI. A path that cannot be read becomes a warning on the record and never
+        a failed node: the step did its work either way, and failing it would
+        turn a bookkeeping problem into a stopped pipeline.
+        """
+        body, record = split_envelope(stdout)
+        if record is None:
+            return body, None
+        declared = record.get("artifacts")
+        if not isinstance(declared, list):
+            return body, record
+        kept: list[dict] = []
+        warnings = [str(w) for w in (record.get("warnings") or [])]
+        for entry in declared:
+            if not isinstance(entry, dict):
+                continue
+            name, source = entry.get("name"), entry.get("path")
+            if not name or not source:
+                continue
+            try:
+                written = artifacts.store_artifact(
+                    self.artifacts_root, run_id, node_id, str(name), Path(str(source))
+                )
+            except (OSError, ValueError) as exc:
+                warnings.append(f"artifact {name!r} not stored: {exc}")
+                continue
+            kept.append(
+                {
+                    "name": name,
+                    "label": entry.get("label") or name,
+                    "kind": entry.get("kind") or "text",
+                    "bytes": written,
+                    "truncated": written >= artifacts.MAX_ARTIFACT_BYTES,
+                }
+            )
+        record["artifacts"] = kept
+        if warnings:
+            record["warnings"] = warnings
+        return body, record
 
     def _build_env(self, requested: Optional[Sequence[str]]) -> dict:
         """The command sees only vars whose names are both requested by the node
