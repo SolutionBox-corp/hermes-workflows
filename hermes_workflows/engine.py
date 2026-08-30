@@ -531,9 +531,14 @@ class Engine:
 
     def _advance_step(self, spec_path: str, run_id: str) -> tuple[dict, dict]:
         run = self.status(run_id)
-        # Trace snapshot: node statuses, run status, and emitted markers before
-        # this step mutates anything; _emit_trace derives the timeline by diff.
-        prior = _trace_snapshot(run) if self.trace is not None else None
+        # Status snapshot: node statuses, run status and emitted markers before
+        # this step mutates anything. Two consumers derive their work by diffing
+        # it — the per-node timestamps (always) and the trace timeline (only when
+        # a writer is injected). Taken unconditionally because the timestamps are
+        # not opt-in: how long a step took must not depend on whether someone
+        # enabled tracing. It is a dict of short strings; the cost is nil next to
+        # the subprocess this step is about to run.
+        prior = _trace_snapshot(run)
         plan = self._core(["compile-preview", spec_path])
         task_params = {task["node"]: task for task in plan["kanban_tasks"]}
         # Script steps share the per-node params map; the composite executor
@@ -702,6 +707,10 @@ class Engine:
                         block_ids = _extract_task_ids_block(node["output"])
                         if block_ids:
                             node["task_ids"] = block_ids
+                    # The step's own account of itself, beside its output: the
+                    # diagnostics it wrote to stderr and the structured record it
+                    # declared. Rendered by the inspector, never routed on.
+                    self._apply_step_record(node, completions)
                     self._merge_telemetry(node)
                     settled_cards.extend(handles)
             elif any(c.status == "blocked" for c in completions):
@@ -794,7 +803,8 @@ class Engine:
         run["status"] = decision["run_status"]
         self._emit_lifecycle(run, decision, plan.get("deliver"), blocked_nodes, stuck_nodes)
         self._emit_memory(run, spec_path)
-        if prior is not None:
+        self._stamp_node_times(prior, run)
+        if self.trace is not None:
             self._emit_trace(prior, run)
         self._save(run)
         # The aggregates are persisted on the nodes now; consume the sidecars
@@ -827,6 +837,49 @@ class Engine:
             self.trace.emit(run_id, kind, **payload)
         except Exception as exc:  # noqa: BLE001 - tracing never fails a run
             print(f"hermes-workflows: trace emit failed: {exc}", file=sys.stderr)
+
+    # Node statuses that mean the work is underway, and those that mean it is
+    # over. Kept next to the stamping that reads them so the two cannot drift.
+    _ACTIVE_NODE_STATUSES = ("scheduled", "running")
+    _TERMINAL_NODE_STATUSES = ("completed", "failed", "skipped", "cancelled")
+
+    def _stamp_node_times(self, prior: dict, run: dict, now: int | None = None) -> None:
+        """Stamp ``started_at`` / ``finished_at`` on nodes whose status changed.
+
+        Driven by the same pre-step snapshot the trace diffs, so one clock covers
+        every node kind instead of each executor keeping its own. The snapshot is
+        taken unconditionally for exactly this reason: a step's duration must be
+        answerable whether or not someone enabled tracing.
+
+        ``started_at`` is written once and never overwritten. A node passes
+        through ``scheduled`` then ``running``, and a retry re-enters
+        ``scheduled`` outright; keeping the first activation makes the pair a
+        truthful outer bound rather than a measure of the last attempt alone.
+        """
+        stamp = int(time.time()) if now is None else now
+        for node_id, node in run["nodes"].items():
+            before = prior["statuses"].get(node_id)
+            after = node.get("status")
+            if before == after:
+                continue
+            if after in self._ACTIVE_NODE_STATUSES and node.get("started_at") is None:
+                node["started_at"] = stamp
+            if after in self._TERMINAL_NODE_STATUSES:
+                node["finished_at"] = stamp
+
+    def _apply_step_record(self, node: dict, completions) -> None:
+        """Carry a settled step's stderr and its declared record onto the node.
+
+        Takes the last completion that has each, so a batch node keeps the most
+        recent attempt - the one whose artifacts are the ones on disk. A
+        completion carrying neither leaves an earlier one in place rather than
+        erasing it.
+        """
+        for completion in completions:
+            if completion.stderr:
+                node["stderr"] = completion.stderr
+            if completion.record is not None:
+                node["record"] = completion.record
 
     def _emit_trace(self, prior: dict, run: dict) -> None:
         """Derive this step's timeline by diffing the pre-step snapshot against

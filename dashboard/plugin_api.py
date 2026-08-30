@@ -471,6 +471,38 @@ async def get_run(run_id: str) -> dict:
     return run
 
 
+@router.get("/runs/{run_id}/nodes/{node_id}/artifacts/{name}")
+async def get_node_artifact(run_id: str, node_id: str, name: str) -> dict:
+    """One stored artifact's text — a step's prompt, its full result, the diff it
+    wrote — fetched only when a reader opens that section.
+
+    Deliberately not part of ``GET /runs/{id}``: the inspector polls the whole
+    run state every couple of seconds, and a diff has no business riding that
+    cadence. Only an artifact's metadata travels with the run; the bytes live
+    here.
+
+    ``404`` covers both "no such artifact" and "unsafely named". An unsafe name
+    must never reach the filesystem, so the two are indistinguishable by design
+    and this route does not have to tell them apart.
+    """
+    from hermes_workflows import artifacts, config
+
+    found = artifacts.read_artifact(config.runs_artifacts_dir(), run_id, node_id, name)
+    if found is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    text, truncated = found
+    return {
+        "run_id": run_id,
+        "node_id": node_id,
+        "name": name,
+        "text": text,
+        "truncated": truncated,
+        # Bytes, not characters: the results this serves are routinely Polish or
+        # Czech, where the two differ.
+        "bytes": len(text.encode("utf-8")),
+    }
+
+
 @router.get("/runs/{run_id}/export")
 async def export_run(run_id: str) -> dict:
     """Return a run's full state bundle (per-node detail, incl. Hermes task ids)

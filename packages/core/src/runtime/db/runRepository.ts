@@ -7,7 +7,13 @@
 
 import type { Database } from "bun:sqlite";
 
-import type { RunState, RunStatus, NodeRunState, NodeTelemetry } from "../../schema/run.ts";
+import type {
+  RunState,
+  RunStatus,
+  NodeRunState,
+  NodeRecord,
+  NodeTelemetry,
+} from "../../schema/run.ts";
 import type { ParamValue } from "../../templates/params.ts";
 import { ACTIVE_NODE_STATUSES, ACTIVE_RUN_STATUSES } from "../status.ts";
 
@@ -109,6 +115,10 @@ interface NodeRow {
   driven_task_ids: string | null;
   reviewed_task_ids: string | null;
   wait_started_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  stderr: string | null;
+  record_json: string | null;
   adopt_seq_json: string | null;
   adopt_blocked_since: string | null;
   task_ids_json: string | null;
@@ -250,8 +260,8 @@ export class RunRepository {
     this.db
       .query(
         `INSERT INTO workflow_node_runs
-           (id, run_id, node_id, node_type, status, hermes_task_id, driven_task_ids, reviewed_task_ids, wait_started_at, adopt_seq_json, adopt_blocked_since, task_ids_json, transient_retries, retry_after, outcome, review_decision, review_note, seq, output_json, error, telemetry_json)
-         VALUES ($id, $run, $node, $type, $status, $task, $driven, $reviewed, $waitStarted, $adoptSeq, $adoptBlocked, $taskIds, $transientRetries, $retryAfter, $outcome, $review, $reviewNote, $seq, $output, $error, $telemetry)
+           (id, run_id, node_id, node_type, status, hermes_task_id, driven_task_ids, reviewed_task_ids, wait_started_at, started_at, finished_at, stderr, record_json, adopt_seq_json, adopt_blocked_since, task_ids_json, transient_retries, retry_after, outcome, review_decision, review_note, seq, output_json, error, telemetry_json)
+         VALUES ($id, $run, $node, $type, $status, $task, $driven, $reviewed, $waitStarted, $startedAt, $finishedAt, $stderr, $record, $adoptSeq, $adoptBlocked, $taskIds, $transientRetries, $retryAfter, $outcome, $review, $reviewNote, $seq, $output, $error, $telemetry)
          ON CONFLICT(id) DO UPDATE SET
            node_type = excluded.node_type,
            status = excluded.status,
@@ -259,6 +269,10 @@ export class RunRepository {
            driven_task_ids = excluded.driven_task_ids,
            reviewed_task_ids = excluded.reviewed_task_ids,
            wait_started_at = excluded.wait_started_at,
+           started_at = excluded.started_at,
+           finished_at = excluded.finished_at,
+           stderr = excluded.stderr,
+           record_json = excluded.record_json,
            adopt_seq_json = excluded.adopt_seq_json,
            adopt_blocked_since = excluded.adopt_blocked_since,
            task_ids_json = excluded.task_ids_json,
@@ -288,6 +302,10 @@ export class RunRepository {
             ? JSON.stringify(node.reviewed_task_ids)
             : null,
         $waitStarted: node.wait_started_at === undefined ? null : String(node.wait_started_at),
+        $startedAt: node.started_at === undefined ? null : String(node.started_at),
+        $finishedAt: node.finished_at === undefined ? null : String(node.finished_at),
+        $stderr: node.stderr ?? null,
+        $record: node.record === undefined ? null : JSON.stringify(node.record),
         $adoptSeq: node.adopt_seq === undefined ? null : JSON.stringify(node.adopt_seq),
         $adoptBlocked:
           node.adopt_blocked_since === undefined ? null : String(node.adopt_blocked_since),
@@ -330,6 +348,10 @@ export class RunRepository {
         node.reviewed_task_ids = JSON.parse(n.reviewed_task_ids) as string[];
       }
       if (n.wait_started_at !== null) node.wait_started_at = Number(n.wait_started_at);
+      if (n.started_at !== null) node.started_at = Number(n.started_at);
+      if (n.finished_at !== null) node.finished_at = Number(n.finished_at);
+      if (n.stderr !== null) node.stderr = n.stderr;
+      if (n.record_json !== null) node.record = JSON.parse(n.record_json) as NodeRecord;
       if (n.adopt_seq_json !== null) {
         node.adopt_seq = JSON.parse(n.adopt_seq_json) as NodeRunState["adopt_seq"];
       }

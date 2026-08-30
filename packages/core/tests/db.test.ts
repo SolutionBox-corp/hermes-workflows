@@ -542,3 +542,80 @@ describe("RunRepository — latest run by workflow", () => {
     expect(lrepo.latestRunByWorkflow()["never-ran"]).toBeUndefined();
   });
 });
+
+describe("RunRepository — the node audit record", () => {
+  test("round-trips per-node timestamps, stderr and record", () => {
+    const run = createRunState(workflow, "run-record");
+    run.status = "running";
+    run.nodes["a"] = {
+      node_id: "a",
+      status: "completed",
+      outcome: "success",
+      seq: 1,
+      started_at: 1788100974,
+      finished_at: 1788101267,
+      stderr: "worktree: /w\nrc=0",
+      record: {
+        headline: "design written",
+        facts: [{ label: "cost", value: "$1.49" }],
+        handoff: [{ label: "branch", value: "agent/demo" }],
+        artifacts: [
+          { name: "diff.patch", label: "Diff", kind: "diff", bytes: 6, truncated: false },
+        ],
+        warnings: ["artifact 'gone.txt' not stored"],
+      },
+    };
+    repo.saveRun(run);
+
+    const loaded = repo.loadRun("run-record");
+    // Epoch seconds come back as numbers, not the TEXT they are stored as -
+    // the same convention wait_started_at already uses.
+    expect(loaded?.nodes["a"]?.started_at).toBe(1788100974);
+    expect(loaded?.nodes["a"]?.finished_at).toBe(1788101267);
+    expect(loaded?.nodes["a"]?.stderr).toBe("worktree: /w\nrc=0");
+    expect(loaded?.nodes["a"]?.record).toEqual({
+      headline: "design written",
+      facts: [{ label: "cost", value: "$1.49" }],
+      handoff: [{ label: "branch", value: "agent/demo" }],
+      artifacts: [{ name: "diff.patch", label: "Diff", kind: "diff", bytes: 6, truncated: false }],
+      warnings: ["artifact 'gone.txt' not stored"],
+    });
+  });
+
+  test("a node that produced none of it stays clean", () => {
+    const run = createRunState(workflow, "run-record-absent");
+    run.status = "running";
+    run.nodes["a"] = { node_id: "a", status: "completed", outcome: "success" };
+    repo.saveRun(run);
+
+    const loaded = repo.loadRun("run-record-absent");
+    expect(loaded?.nodes["a"]?.started_at).toBeUndefined();
+    expect(loaded?.nodes["a"]?.finished_at).toBeUndefined();
+    expect(loaded?.nodes["a"]?.stderr).toBeUndefined();
+    expect(loaded?.nodes["a"]?.record).toBeUndefined();
+  });
+
+  test("a node that started but has not settled has a start and no finish", () => {
+    const run = createRunState(workflow, "run-record-running");
+    run.status = "running";
+    run.nodes["a"] = { node_id: "a", status: "running", started_at: 1788100974 };
+    repo.saveRun(run);
+
+    const loaded = repo.loadRun("run-record-running");
+    expect(loaded?.nodes["a"]?.started_at).toBe(1788100974);
+    expect(loaded?.nodes["a"]?.finished_at).toBeUndefined();
+  });
+
+  test("telemetry carries a provider-reported cost", () => {
+    const run = createRunState(workflow, "run-cost");
+    run.status = "completed";
+    run.nodes["a"] = {
+      node_id: "a",
+      status: "completed",
+      telemetry: { total_tokens: 25, cost_usd: 1.4896065 },
+    };
+    repo.saveRun(run);
+
+    expect(repo.loadRun("run-cost")?.nodes["a"]?.telemetry?.cost_usd).toBe(1.4896065);
+  });
+});

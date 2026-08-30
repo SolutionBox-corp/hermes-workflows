@@ -49,6 +49,16 @@ CREATE TABLE IF NOT EXISTS workflow_node_runs (
   -- Epoch seconds a wait node began polling (for its optional timeout). Added
   -- after the initial schema, so connection.ts ALTERs pre-existing databases.
   wait_started_at TEXT,
+  -- Epoch seconds the node first became active and the moment it settled, so a
+  -- step's duration is answerable at all. Added after the initial schema, so
+  -- connection.ts ALTERs pre-existing databases.
+  started_at      TEXT,
+  finished_at     TEXT,
+  -- Captured stderr, and the step's own structured record of itself (JSON, see
+  -- schema/run.ts NodeRecord). Added after the initial schema, so connection.ts
+  -- ALTERs pre-existing databases.
+  stderr          TEXT,
+  record_json     TEXT,
   -- JSON bookkeeping for a sequential adopt node (pending ids, assignee,
   -- accumulated outputs/failed). Added after the initial schema, so
   -- connection.ts ALTERs pre-existing databases.

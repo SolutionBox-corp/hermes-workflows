@@ -64,7 +64,55 @@ export interface NodeTelemetry {
   /** Most recent structured error (provider or tool), when one occurred. */
   error_type?: string;
   error_message?: string;
+  /**
+   * Provider-reported cost of the node's most recent attempt, in US dollars.
+   * Absent on hosts that report no cost, so a missing value means "unknown",
+   * never "free".
+   */
+  cost_usd?: number;
   approval?: NodeTelemetryApproval;
+}
+
+/**
+ * One piece of evidence a step produced — its prompt, its full result, the diff
+ * it wrote — stored under the node's artifact directory and fetched only when a
+ * reader opens it. Only this metadata travels with the run state, which the
+ * inspector polls every couple of seconds; the bytes never do.
+ */
+export interface NodeRecordArtifact {
+  /** Filename within the node's artifact directory; also the fetch key. */
+  name: string;
+  /** Heading to show it under. Defaults to `name`. */
+  label?: string;
+  /** Rendering hint. `diff` gets +/- colouring; the rest render as plain text. */
+  kind?: "text" | "diff" | "markdown";
+  bytes?: number;
+  /** The stored copy hit the artifact size cap and is incomplete. */
+  truncated?: boolean;
+}
+
+/**
+ * The audit record a step declared about itself, via the `hermes_node` envelope
+ * on its last stdout line.
+ *
+ * Deliberately domain-agnostic: `facts` and `handoff` are ordered label/value
+ * rows the step chooses its own labels for, so the engine never learns what a
+ * "worktree" or a "model" is and any operator's step can describe itself in its
+ * own vocabulary.
+ *
+ * Opaque to routing. It is persisted and rendered, never branched on — a
+ * workflow's path must not depend on a step's own account of itself.
+ */
+export interface NodeRecord {
+  /** One line saying how the step ended, in the step's own words. */
+  headline?: string;
+  /** What happened: ordered label/value rows shown as the summary. */
+  facts?: { label: string; value: string }[];
+  /** Where the work landed and how to pick it up. */
+  handoff?: { label: string; value: string }[];
+  artifacts?: NodeRecordArtifact[];
+  /** Non-fatal problems recording the step, e.g. an artifact it could not read. */
+  warnings?: string[];
 }
 
 export interface NodeRunState {
@@ -126,6 +174,27 @@ export interface NodeRunState {
   review_note?: string;
   /** Captured node output (e.g. the worker's completion summary). */
   output?: string;
+  /**
+   * Captured stderr for backends that have a separate stream (script nodes).
+   * A step's diagnostics conventionally go here rather than into `output`, and
+   * they are most of what an audit of a *successful* step has to read.
+   */
+  stderr?: string;
+  /**
+   * The step's own structured account of itself. See {@link NodeRecord}: it is
+   * rendered, never routed on.
+   */
+  record?: NodeRecord;
+  /**
+   * Epoch seconds the node first entered `scheduled`/`running`, and the moment
+   * it reached a terminal status. Stamped by the bridge from the same status
+   * diff that drives the trace, so one clock covers every node kind rather than
+   * each executor keeping its own. `started_at` is written once and never
+   * overwritten, so a retried node keeps its first activation and the pair
+   * stays a truthful outer bound. A node that never ran has neither.
+   */
+  started_at?: number;
+  finished_at?: number;
   /** Epoch seconds a `wait` node first began polling, for its optional timeout. */
   wait_started_at?: number;
   /**
