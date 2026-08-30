@@ -13,7 +13,7 @@ const distFile = resolve(distDir, "index.js");
 
 // The T0 acceptance criterion: the editor source builds to a single
 // self-executing file that, when loaded against mocked host globals, calls
-// register("workflows", …) and mounts an @xyflow/react canvas on the host's
+// register("hermes-workflows", …) and mounts an @xyflow/react canvas on the host's
 // React instance — proving the bundle shape before any real UI is built.
 describe("T0 bundling spike — built plugin bundle", () => {
   let bundleSource = "";
@@ -77,7 +77,11 @@ describe("T0 bundling spike — built plugin bundle", () => {
     new Function(bundleSource)();
 
     expect(reactAccessed).toBe(true);
-    const App = registered.workflows;
+    // The key is "hermes-workflows", not "workflows": the host matches the
+    // plugin by id and the old key left the tab unmounted. The fix landed in
+    // v0.7.8 but this assertion did not move with it, so the suite has been
+    // red at the tagged release.
+    const App = registered["hermes-workflows"];
     expect(typeof App).toBe("function");
 
     const { container } = render(
