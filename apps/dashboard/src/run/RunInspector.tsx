@@ -281,6 +281,7 @@ export function RunInspector({
                 runId={runId}
                 nodeId={gated.nodeId}
                 node={gated.node}
+                spec={gated.spec}
                 title={gated.spec?.title}
                 description={gated.spec?.description}
               />
@@ -294,6 +295,7 @@ export function RunInspector({
             runId={runId}
             nodeId={selectedNodeId}
             node={selected}
+            spec={selectedSpec}
             description={selectedSpec?.description}
           />
           {selected.status === "waiting_for_review" && (

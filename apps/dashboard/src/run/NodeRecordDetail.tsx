@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { WorkflowsApi } from "../api/client";
-import type { NodeRecordArtifact, NodeRunState } from "../api/types";
+import type { NodeRecordArtifact, NodeRunState, WorkflowNode } from "../api/types";
+import { NodeDefinition } from "./NodeDefinition";
 import { TelemetryDetail } from "./TelemetryDetail";
 import { useNodeArtifact } from "./useNodeArtifact";
 
@@ -9,6 +10,9 @@ export interface NodeRecordDetailProps {
   runId: string;
   nodeId: string;
   node: NodeRunState;
+  /** The node's spec entry. Answers "what was this step asked to do" without
+   *  any cooperation from the step itself. */
+  spec?: WorkflowNode;
   /** The node's title from the spec. Rendered as a heading only when given —
    *  the primary record in a modal already has the title in the modal's own
    *  header, while an embedded record (a gate showing the step it judges) needs
@@ -100,6 +104,7 @@ export function NodeRecordDetail({
   runId,
   nodeId,
   node,
+  spec,
   title,
   description,
 }: NodeRecordDetailProps): React.ReactElement {
@@ -121,6 +126,11 @@ export function NodeRecordDetail({
           {elapsed !== null && <span> · {elapsed}</span>}
         </p>
       </div>
+
+      {/* What the step was asked to do, before anything about what it did. A
+          `prompt` node has nothing else at all, and a step that emitted no
+          record still shows the command it ran. */}
+      <NodeDefinition node={spec} />
 
       {record?.headline !== undefined && <p className="hw-record__headline">{record.headline}</p>}
 
