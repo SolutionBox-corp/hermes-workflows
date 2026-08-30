@@ -10,6 +10,7 @@ import type {
   ExportedTemplate,
   ExportedWorkflow,
   HermesPlan,
+  NodeArtifactContent,
   ModelGroup,
   O2BStatus,
   RunOptions,
@@ -61,6 +62,10 @@ export interface WorkflowsApi {
     decision: ReviewDecision,
     note?: string,
   ): Promise<ReviewResult>;
+  /** One stored artifact of one node — a step's prompt, result, or diff.
+   *  Fetched on demand: this content is deliberately absent from `getRun`,
+   *  which the inspector polls every couple of seconds. */
+  getNodeArtifact(id: string, nodeId: string, name: string): Promise<NodeArtifactContent>;
   listSchedules(): Promise<ScheduleListItem[]>;
   pauseSchedule(id: string): Promise<unknown>;
   resumeSchedule(id: string): Promise<unknown>;
@@ -170,6 +175,12 @@ export function createApiClient(fetchJSON: FetchJSON): WorkflowsApi {
 
     retryRun(id, node) {
       return postJson<RunState>(`${run(id)}/retry`, node === undefined ? {} : { node_id: node });
+    },
+
+    getNodeArtifact(id, nodeId, name) {
+      return fetchJSON<NodeArtifactContent>(
+        `${run(id)}/nodes/${encodeURIComponent(nodeId)}/artifacts/${encodeURIComponent(name)}`,
+      );
     },
 
     reviewRun(id, nodeId, decision, note) {

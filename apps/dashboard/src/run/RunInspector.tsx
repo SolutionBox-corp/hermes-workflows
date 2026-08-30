@@ -8,7 +8,8 @@ import type { ReviewDecision, SpecDetail } from "../api/types";
 import { applyRunStatus, isTerminalRun } from "./runView";
 import { CANVAS_NODE_TYPES } from "./canvasNodeTypes";
 import { errorMessage, RUN_POLL_MS, useRunPolling } from "./useRunPolling";
-import { TelemetryDetail } from "./TelemetryDetail";
+import { NodeRecordDetail } from "./NodeRecordDetail";
+import { resolveGatedNode } from "./upstreamNode";
 import { RunLogPanel } from "./RunLogPanel";
 import { deriveRunLogEvents, mergeRunLog, type LoggedRunEvent } from "./runLog";
 import { Badge, Button, Modal } from "../ui/components";
@@ -151,6 +152,25 @@ export function RunInspector({
   const selected = selectedNodeId === null ? undefined : run.nodes[selectedNodeId];
   const terminal = isTerminalRun(run.status);
 
+  // Spec entries carry the node's title and description — what the step is for,
+  // in the author's words. The modal used to show the bare node id and none of
+  // this, so a reader had to already know what `explore` meant.
+  const specNode = (id: string) => detail.workflow.nodes?.find((node) => node.id === id);
+  const selectedSpec = selectedNodeId === null ? undefined : specNode(selectedNodeId);
+
+  // For a gate, the step it is judging. `resolveGatedNode` declines whenever the
+  // graph is ambiguous, and a gate whose upstream node has not run yet has no
+  // record to show, so both cases fall back to the buttons alone.
+  const gatedId =
+    selectedNodeId !== null && selected?.status === "waiting_for_review"
+      ? resolveGatedNode(detail, selectedNodeId)
+      : null;
+  const gatedNode = gatedId === null ? undefined : run.nodes[gatedId];
+  const gated =
+    gatedId !== null && gatedNode !== undefined
+      ? { nodeId: gatedId, node: gatedNode, spec: specNode(gatedId) }
+      : null;
+
   const title = (
     <>
       <span className="hw-bar-title">{run.run_id}</span>
@@ -211,7 +231,9 @@ export function RunInspector({
           the run view is a clean canvas with its actions in the header. */}
       {selected !== undefined && selectedNodeId !== null && (
         <Modal
-          title={selectedNodeId}
+          // The step's name, not its id. `explore` says nothing to a reader who
+          // has not read the spec; "1 · Prozkoumat a navrhnout" does.
+          title={selectedSpec?.title ?? selectedNodeId}
           ariaLabel={`Node ${selectedNodeId}`}
           className="hw-node-modal"
           onClose={() => setSelectedNodeId(null)}
@@ -247,7 +269,33 @@ export function RunInspector({
             )
           }
         >
-          <p>Status: {selected.status}</p>
+          {/* A gate judges the step above it, and until this existed it showed
+              nothing about that step at all — you approved blind, or left the
+              browser to go read files. Render the gated node's record first, so
+              the evidence is above the buttons that act on it. */}
+          {gated !== null && (
+            <div className="hw-record-gated">
+              <div className="hw-eyebrow">What you are approving</div>
+              <NodeRecordDetail
+                api={api}
+                runId={runId}
+                nodeId={gated.nodeId}
+                node={gated.node}
+                title={gated.spec?.title}
+                description={gated.spec?.description}
+              />
+            </div>
+          )}
+          {/* No `title` here: the modal header already carries it, and a second
+              heading with the same text is noise. The embedded gated record
+              above does pass one, because it has to say which step it describes. */}
+          <NodeRecordDetail
+            api={api}
+            runId={runId}
+            nodeId={selectedNodeId}
+            node={selected}
+            description={selectedSpec?.description}
+          />
           {selected.status === "waiting_for_review" && (
             <label className="hw-review-note">
               Note for the next step
@@ -259,18 +307,6 @@ export function RunInspector({
                 onChange={(event) => setReviewNote(event.target.value)}
               />
             </label>
-          )}
-          {selected.review_decision !== undefined && (
-            <p>Decision: {selected.review_decision}</p>
-          )}
-          {selected.outcome !== undefined && <p>Outcome: {selected.outcome}</p>}
-          {selected.output !== undefined && <pre className="hw-output">{selected.output}</pre>}
-          {selected.error !== undefined && <p className="hw-error">{selected.error}</p>}
-          {selected.telemetry !== undefined && (
-            <TelemetryDetail
-              telemetry={selected.telemetry}
-              nodeActive={selected.status === "scheduled" || selected.status === "running"}
-            />
           )}
         </Modal>
       )}

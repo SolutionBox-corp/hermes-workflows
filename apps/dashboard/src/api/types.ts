@@ -20,6 +20,8 @@ import type {
   NodeStatus,
   NodeTelemetry,
   NodeTelemetryApproval,
+  NodeRecord,
+  NodeRecordArtifact,
 } from "@hermes-workflows/core/schema/run.ts";
 import type { UiLayout } from "@hermes-workflows/core/schema/ui.ts";
 import type {
@@ -44,10 +46,24 @@ export type {
   NodeStatus,
   NodeTelemetry,
   NodeTelemetryApproval,
+  NodeRecord,
+  NodeRecordArtifact,
   ValidationResult,
   ValidationIssue,
   HermesPlan,
 };
+
+/** Returned by `GET /runs/{id}/nodes/{node}/artifacts/{name}` — one stored
+ *  artifact's text. `bytes` counts UTF-8 bytes, not characters, and `truncated`
+ *  says the stored copy hit the artifact size cap and is incomplete. */
+export interface NodeArtifactContent {
+  run_id: string;
+  node_id: string;
+  name: string;
+  text: string;
+  truncated: boolean;
+  bytes: number;
+}
 
 /** A loaded spec with its on-disk location (the shape of `GET /workflows/{id}`
  *  and the body persisted by `PUT`). Mirrors core's `SpecDetail`, declared here

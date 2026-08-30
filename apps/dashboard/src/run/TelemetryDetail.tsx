@@ -77,6 +77,9 @@ export function TelemetryDetail({
   if (t.api_calls !== undefined) rows.push(["API calls", String(t.api_calls)]);
   if (t.tool_calls !== undefined) rows.push(["Tool calls", formatToolCalls(t)]);
   if (t.subagents !== undefined) rows.push(["Subagents", String(t.subagents)]);
+  // Four decimals: these are fractions of a dollar per step, and rounding to
+  // cents would show most of them as $0.00.
+  if (t.cost_usd !== undefined) rows.push(["Cost", `$${t.cost_usd.toFixed(4)}`]);
 
   return (
     <div className="hw-telemetry">

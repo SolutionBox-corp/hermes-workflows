@@ -529,6 +529,87 @@ a.hw-o2b:focus-visible {
   padding: 6px 8px;
 }
 
+/* ── The node audit record ──────────────────────────────────────────────
+   One step's account of itself in the run inspector: what it was for, how it
+   ended, what it cost, the evidence it left and where the work is waiting. */
+.hw-record {
+  display: grid;
+  gap: 10px;
+}
+.hw-record__head {
+  display: grid;
+  gap: 4px;
+}
+.hw-record__title {
+  margin: 0;
+  font-size: 1em;
+}
+.hw-record__status {
+  margin: 0;
+  font-size: 0.9em;
+  color: var(--color-muted-foreground, #9a9a9a);
+}
+.hw-record__headline {
+  margin: 0;
+}
+.hw-record__section {
+  display: grid;
+  gap: 4px;
+}
+
+/* Label/value rows. Two columns on anything but a narrow modal, so the values
+   line up and the block scans as a table rather than a paragraph. */
+.hw-record__facts {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+.hw-record__fact {
+  display: grid;
+  grid-template-columns: minmax(90px, 22%) 1fr;
+  gap: 12px;
+  font-size: 0.9em;
+}
+.hw-record__fact dt {
+  color: var(--color-muted-foreground, #9a9a9a);
+}
+.hw-record__fact dd {
+  margin: 0;
+  /* Branch names, worktree paths and resume commands are long and unbroken. */
+  overflow-wrap: anywhere;
+}
+.hw-record__warnings {
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* One artifact, collapsed until opened — opening it is what triggers the
+   fetch, so a diff costs nothing until someone wants to read it. */
+.hw-artifact > summary {
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.hw-artifact__size {
+  color: var(--color-muted-foreground, #9a9a9a);
+}
+
+/* A diff reads as a diff: added and removed lines carry their own colour.
+   Applied to the whole block rather than per line, because the artifact is
+   plain text and there are no per-line elements to target. */
+.hw-diff {
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
+
+/* The record of the step a gate is judging, above the buttons that act on it.
+   Set apart so it never reads as the gate's own output. */
+.hw-record-gated {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--hw-border, rgba(255, 255, 255, 0.18));
+  border-radius: 6px;
+}
+
 /* Agent-telemetry block in the run inspector's node detail. */
 .hw-telemetry {
   margin: 8px 0;
