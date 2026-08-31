@@ -84,8 +84,9 @@ export interface NodeRecordArtifact {
   name: string;
   /** Heading to show it under. Defaults to `name`. */
   label?: string;
-  /** Rendering hint. `diff` gets +/- colouring; the rest render as plain text. */
-  kind?: "text" | "diff" | "markdown";
+  /** Rendering hint. `diff` gets +/- colouring, `image` renders as a picture;
+   *  the rest render as plain text. */
+  kind?: "text" | "diff" | "markdown" | "image";
   bytes?: number;
   /** The stored copy hit the artifact size cap and is incomplete. */
   truncated?: boolean;

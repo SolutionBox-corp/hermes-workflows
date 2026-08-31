@@ -87,6 +87,38 @@ def store_artifact(
     return written
 
 
+# Artifacts that are not text. A screenshot is evidence, and evidence a reviewer
+# cannot look at is evidence they have to take on trust, so these are served as
+# bytes rather than mangled through a UTF-8 decode.
+BINARY_SUFFIXES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def media_type(name: str) -> str | None:
+    """The media type for a binary artifact, or None when it is text."""
+    _stem, _dot, suffix = name.rpartition(".")
+    return BINARY_SUFFIXES.get(f".{suffix.lower()}") if _dot else None
+
+
+def read_artifact_bytes(
+    root: Path | str, run_id: str, node_id: str, name: str
+) -> tuple[bytes, bool] | None:
+    """``(data, truncated)`` for any artifact, without decoding it."""
+    try:
+        path = node_artifact_dir(root, run_id, node_id) / _segment(name, "artifact name")
+    except ValueError:
+        return None
+    if not path.is_file():
+        return None
+    data = path.read_bytes()
+    return data, len(data) >= MAX_ARTIFACT_BYTES
+
+
 def read_artifact(
     root: Path | str, run_id: str, node_id: str, name: str
 ) -> tuple[str, bool] | None:

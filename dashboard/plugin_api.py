@@ -485,9 +485,32 @@ async def get_node_artifact(run_id: str, node_id: str, name: str) -> dict:
     must never reach the filesystem, so the two are indistinguishable by design
     and this route does not have to tell them apart.
     """
+    import base64
+
     from hermes_workflows import artifacts, config
 
-    found = artifacts.read_artifact(config.runs_artifacts_dir(), run_id, node_id, name)
+    root = config.runs_artifacts_dir()
+    kind = artifacts.media_type(name)
+    if kind is not None:
+        # A screenshot is evidence. Serving it base64 over the same JSON-only
+        # channel keeps one route and one permission check, and the page turns it
+        # straight back into an <img>.
+        raw = artifacts.read_artifact_bytes(root, run_id, node_id, name)
+        if raw is None:
+            raise HTTPException(status_code=404, detail="artifact not found")
+        data, truncated = raw
+        return {
+            "run_id": run_id,
+            "node_id": node_id,
+            "name": name,
+            "text": base64.b64encode(data).decode("ascii"),
+            "encoding": "base64",
+            "media_type": kind,
+            "truncated": truncated,
+            "bytes": len(data),
+        }
+
+    found = artifacts.read_artifact(root, run_id, node_id, name)
     if found is None:
         raise HTTPException(status_code=404, detail="artifact not found")
     text, truncated = found
@@ -496,6 +519,7 @@ async def get_node_artifact(run_id: str, node_id: str, name: str) -> dict:
         "node_id": node_id,
         "name": name,
         "text": text,
+        "encoding": "utf-8",
         "truncated": truncated,
         # Bytes, not characters: the results this serves are routinely Polish or
         # Czech, where the two differ.

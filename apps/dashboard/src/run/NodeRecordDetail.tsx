@@ -97,7 +97,7 @@ function ArtifactSection({
   startOpen?: boolean;
 }): React.ReactElement {
   const [open, setOpen] = useState(startOpen);
-  const { text, truncated, loading, error } = useNodeArtifact(
+  const { text, dataUrl, truncated, loading, error } = useNodeArtifact(
     api,
     runId,
     nodeId,
@@ -127,8 +127,17 @@ function ArtifactSection({
           Could not read {artifact.name}: {error}
         </p>
       )}
-      {text !== null &&
-        (artifact.kind === "diff" ? <DiffBody text={text} /> : <pre className="hw-output">{text}</pre>)}
+      {/* A screenshot is evidence, so it is shown, not described. */}
+      {dataUrl !== null && (
+        <img className="hw-shot" src={dataUrl} alt={artifact.label ?? artifact.name} />
+      )}
+      {dataUrl === null &&
+        text !== null &&
+        (artifact.kind === "diff" ? (
+          <DiffBody text={text} />
+        ) : (
+          <pre className="hw-output">{text}</pre>
+        ))}
       {(truncated || artifact.truncated === true) && (
         <p className="hw-note">Truncated at the artifact size cap - this copy is incomplete.</p>
       )}

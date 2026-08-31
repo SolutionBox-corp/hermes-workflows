@@ -67,6 +67,7 @@ def test_reads_a_stored_artifact(client, artifacts_root, tmp_path) -> None:
         "node_id": "explore",
         "name": "diff.patch",
         "text": "+++ a\n",
+        "encoding": "utf-8",
         "truncated": False,
         "bytes": 6,
     }
@@ -106,3 +107,56 @@ def test_byte_count_is_utf8_bytes_not_characters(client, artifacts_root, tmp_pat
 
     assert body["text"] == "Łódź"
     assert body["bytes"] == 7
+
+
+PNG_1x1 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000a49444154789c6360000002000100ffff03000006000557bfabd400"
+    "00000049454e44ae426082"
+)
+
+
+def test_an_image_artifact_is_served_as_base64(client, artifacts_root, tmp_path) -> None:
+    """A screenshot is evidence. Serving it through the same JSON-only channel
+    keeps one route and one permission check."""
+    import base64
+
+    source = tmp_path / "shot.png"
+    source.write_bytes(PNG_1x1)
+    artifacts.store_artifact(artifacts_root, "run-1", "explore", "shot.png", source)
+
+    body = client.get("/runs/run-1/nodes/explore/artifacts/shot.png").json()
+
+    assert body["encoding"] == "base64"
+    assert body["media_type"] == "image/png"
+    assert base64.b64decode(body["text"]) == PNG_1x1
+    assert body["bytes"] == len(PNG_1x1)
+
+
+def test_a_text_artifact_still_says_its_encoding(client, artifacts_root, tmp_path) -> None:
+    _store(artifacts_root, tmp_path, "result.md", "hello")
+    body = client.get("/runs/run-1/nodes/explore/artifacts/result.md").json()
+    assert body["encoding"] == "utf-8"
+    assert body["text"] == "hello"
+    assert "media_type" not in body
+
+
+def test_a_png_is_not_mangled_through_a_utf8_decode(tmp_path) -> None:
+    """The regression this guards: read_artifact would replace every invalid
+    byte, so the stored image and the served image were different files."""
+    source = tmp_path / "shot.png"
+    source.write_bytes(PNG_1x1)
+    root = tmp_path / "runs"
+    artifacts.store_artifact(root, "r", "n", "shot.png", source)
+
+    data, truncated = artifacts.read_artifact_bytes(root, "r", "n", "shot.png")
+
+    assert data == PNG_1x1
+    assert truncated is False
+
+
+def test_media_type_only_claims_known_binary_suffixes() -> None:
+    assert artifacts.media_type("a.png") == "image/png"
+    assert artifacts.media_type("a.JPG") == "image/jpeg"
+    assert artifacts.media_type("report.md") is None
+    assert artifacts.media_type("noextension") is None

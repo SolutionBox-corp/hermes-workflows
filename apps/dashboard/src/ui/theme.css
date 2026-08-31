@@ -612,6 +612,20 @@ a.hw-o2b:focus-visible {
   color: var(--color-muted-foreground, #9a9a9a);
 }
 
+/* An evidence screenshot. Bounded so a full-page capture does not push the
+   modal's own buttons off screen, and bordered so the picture's own white
+   background does not read as part of the panel. */
+.hw-shot {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  margin: 8px 0;
+  border: 1px solid var(--hw-border, rgba(255, 255, 255, 0.18));
+  border-radius: 4px;
+  background: #fff;
+}
+
 /* What the step is asking a person to decide. Set apart from the facts around
    it, because it is the one block a reviewer must not skim past. */
 .hw-record__questions {

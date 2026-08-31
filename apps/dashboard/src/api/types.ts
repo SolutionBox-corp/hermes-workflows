@@ -60,7 +60,12 @@ export interface NodeArtifactContent {
   run_id: string;
   node_id: string;
   name: string;
+  /** The content. Base64 when `encoding` says so - a screenshot travels over
+   *  the same JSON-only channel as everything else. */
   text: string;
+  encoding?: "utf-8" | "base64";
+  /** Set for a binary artifact, e.g. `image/png`. */
+  media_type?: string;
   truncated: boolean;
   bytes: number;
 }
