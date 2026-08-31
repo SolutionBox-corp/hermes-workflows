@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -75,7 +76,21 @@ class ScriptExecutor:
         # iteration) means the command already ran. Never re-run it — a tick may
         # retry after a crash, and a script command is not assumed idempotent.
         # A loop re-entry uses a higher iteration, so it gets a fresh handle.
-        if self.poll(handle).settled:
+        existing = self.poll(handle)
+        if existing.settled:
+            return handle
+        # ... and neither is a command that is still RUNNING. The completion is
+        # only written when the command returns, so for the whole duration of a
+        # long step nothing said "already in flight" and the next advance ran it
+        # again: `hermes-workflows run` blocks in the command while the cron tick
+        # advances the same run. Measured on a real 3-minute step - two run
+        # directories 57 seconds apart, two invocations of the model, twice the
+        # money.
+        #
+        # Bounded so a crash cannot wedge the node forever: if the marker is
+        # older than this node's own timeout, the process that wrote it cannot
+        # still be running, and the step is allowed to start again.
+        if existing.started and not self._stale(handle, params):
             return handle
         if not self._enabled():
             self.store.write(
@@ -87,12 +102,34 @@ class ScriptExecutor:
                 ),
             )
             return handle
+        self._mark_started(handle)
         completion = self._invoke(params, run_id=run_id, node_id=node_id)
         self.store.write(handle, completion)
         return handle
 
     def poll(self, handle: str) -> Completion:
         return self.store.read(handle)
+
+    def _mark_started(self, handle: str) -> None:
+        """Claim the handle before running, so a concurrent advance sees it."""
+        self.store.write(handle, Completion(settled=False, started=True))
+
+    def _stale(self, handle: str, params: dict) -> bool:
+        """Whether a started-but-unsettled claim is too old to still be running.
+
+        The process that wrote the marker is bounded by the node's own timeout;
+        past that it is gone and the claim is a leftover, not a running step.
+        Without this a crash mid-command would wedge the node forever.
+        """
+        timeout = params.get("timeout_seconds")
+        limit = float(timeout) if timeout is not None else self.timeout_seconds
+        try:
+            age = time.time() - self.store.path_for(handle).stat().st_mtime
+        except OSError:
+            return False
+        # A generous margin over the timeout: the command is killed at the
+        # timeout, and the writing process still needs a moment to record that.
+        return age > limit + 60
 
     # --- internals --------------------------------------------------------
 

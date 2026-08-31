@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 from pathlib import Path
 
 from hermes_workflows import artifacts
@@ -199,3 +200,46 @@ def test_questions_reach_the_record(tmp_path) -> None:
     completion = _run(ex, f"echo hi; {_emit(record)}")
 
     assert completion.record["questions"] == ["Potvrdit rozsah?", "Ma to mit vlastni spec?"]
+
+
+def test_a_running_step_is_not_started_a_second_time(tmp_path) -> None:
+    """The completion is only written when the command RETURNS, so during a long
+    step nothing said "already running" and the next tick ran it again. Measured
+    on a real 3-minute explore step: two run directories 57 seconds apart, two
+    invocations of the model, twice the money.
+
+    The race is across processes - `hermes-workflows run` blocks in the command
+    while the cron tick advances the same run - so the first schedule has to be
+    in flight, not finished, when the second arrives.
+    """
+    import threading
+
+    ex = _executor(tmp_path)
+    marker = tmp_path / "invocations"
+    command = f"printf x >> {shlex.quote(str(marker))}; sleep 3"
+    params = {"command": command}
+
+    first = threading.Thread(
+        target=ex.schedule,
+        kwargs=dict(run_id="r", node_id="n", workflow_id="wf", params=params),
+    )
+    first.start()
+    try:
+        # Let the first invocation actually begin, then arrive as the tick would.
+        for _ in range(50):
+            if marker.exists():
+                break
+            time.sleep(0.05)
+        ex.schedule(run_id="r", node_id="n", workflow_id="wf", params=params)
+    finally:
+        first.join(timeout=20)
+
+    assert marker.read_text() == "x", "the command ran twice"
+
+
+def test_a_started_marker_is_visible_before_the_command_finishes(tmp_path) -> None:
+    ex = _executor(tmp_path)
+    ex._mark_started("script:r:n:0")
+    state = ex.poll("script:r:n:0")
+    assert state.started is True
+    assert state.settled is False
