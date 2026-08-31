@@ -6,7 +6,7 @@
  * the wrong evidence turns a review into a rubber stamp.
  */
 import { describe, expect, it } from "vitest";
-import { resolveGatedNode, reviewRoutes } from "../src/run/gateGraph";
+import { resolveGatedNode, resolveNodeInput, reviewRoutes } from "../src/run/gateGraph";
 import type { SpecDetail } from "../src/api/types";
 
 function spec(nodes: unknown[], edges: unknown[]): SpecDetail {
@@ -151,5 +151,90 @@ describe("reviewRoutes", () => {
   it("returns nothing for a node that is not a gate", () => {
     expect(reviewRoutes(GRAPH, "explore")).toEqual([]);
     expect(reviewRoutes(GRAPH, "nope")).toEqual([]);
+  });
+});
+
+
+describe("resolveNodeInput", () => {
+  const CHAIN = spec(
+    [
+      { id: "explore", type: "script", title: "1 · Prozkoumat" },
+      { id: "gate", type: "human_review" },
+      { id: "tdd", type: "script", title: "2 · Implementovat" },
+    ],
+    [
+      { from: "explore", to: "gate" },
+      { from: "gate", to: "tdd", condition: { type: "review_status", equals: "approved" } },
+      { from: "gate", to: "explore", condition: { type: "review_status", equals: "needs_changes" } },
+    ],
+  );
+
+  it("names the step whose work feeds this one", () => {
+    expect(resolveNodeInput(CHAIN, "gate", {})).toEqual({
+      fromNodeId: "explore",
+      fromTitle: "1 · Prozkoumat",
+    });
+  });
+
+  it("passes through a gate and reports its verdict and note", () => {
+    const states = { gate: { review_decision: "approved", review_note: "zuzit rozsah" } };
+    expect(resolveNodeInput(CHAIN, "tdd", states)).toEqual({
+      fromNodeId: "explore",
+      fromTitle: "1 · Prozkoumat",
+      gateNodeId: "gate",
+      decision: "approved",
+      note: "zuzit rozsah",
+    });
+  });
+
+  it("does not mistake the gate's own loop-back edge for the work behind it", () => {
+    // `gate -> explore` is the needs_changes loop. Walking back from `explore`
+    // must not report `explore` as its own input.
+    const states = { gate: { review_decision: "needs_changes" } };
+    const input = resolveNodeInput(CHAIN, "explore", states);
+    expect(input?.fromNodeId).not.toBe("explore");
+  });
+
+  it("reports the gate even when the work behind it is ambiguous", () => {
+    const forked = spec(
+      [
+        { id: "a", type: "script" },
+        { id: "b", type: "script" },
+        { id: "gate", type: "human_review" },
+        { id: "next", type: "script" },
+      ],
+      [
+        { from: "a", to: "gate" },
+        { from: "b", to: "gate" },
+        { from: "gate", to: "next", condition: { type: "review_status", equals: "approved" } },
+      ],
+    );
+    expect(resolveNodeInput(forked, "next", { gate: { review_decision: "approved" } })).toEqual({
+      fromNodeId: null,
+      gateNodeId: "gate",
+      decision: "approved",
+    });
+  });
+
+  it("reports the gate's verdict as the input of the step it loops back to", () => {
+    // `explore` is not an entry node here: the needs_changes edge re-enters it,
+    // and "the gate sent this back, saying X" is precisely its input.
+    const states = { gate: { review_decision: "needs_changes", review_note: "zuzit" } };
+    expect(resolveNodeInput(CHAIN, "explore", states)).toEqual({
+      fromNodeId: null,
+      gateNodeId: "gate",
+      decision: "needs_changes",
+      note: "zuzit",
+    });
+  });
+
+  it("declines for a true entry node and for several sources", () => {
+    const entry = spec([{ id: "start", type: "prompt" }], []);
+    expect(resolveNodeInput(entry, "start", {})).toBeNull();
+    const forked = spec(
+      [{ id: "a", type: "script" }, { id: "b", type: "script" }, { id: "c", type: "script" }],
+      [{ from: "a", to: "c" }, { from: "b", to: "c" }],
+    );
+    expect(resolveNodeInput(forked, "c", {})).toBeNull();
   });
 });

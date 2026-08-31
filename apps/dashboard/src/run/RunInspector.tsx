@@ -9,7 +9,7 @@ import { applyRunStatus, isTerminalRun } from "./runView";
 import { CANVAS_NODE_TYPES } from "./canvasNodeTypes";
 import { errorMessage, RUN_POLL_MS, useRunPolling } from "./useRunPolling";
 import { NodeRecordDetail } from "./NodeRecordDetail";
-import { resolveGatedNode, reviewRoutes } from "./gateGraph";
+import { resolveGatedNode, resolveNodeInput, reviewRoutes } from "./gateGraph";
 import { RunLogPanel } from "./RunLogPanel";
 import { deriveRunLogEvents, mergeRunLog, type LoggedRunEvent } from "./runLog";
 import { Badge, Button, Modal } from "../ui/components";
@@ -317,6 +317,7 @@ export function RunInspector({
             node={selected}
             spec={selectedSpec}
             description={isGate ? undefined : selectedSpec?.description}
+            input={selectedNodeId === null ? null : resolveNodeInput(detail, selectedNodeId, run.nodes)}
           />
           {selected.status === "waiting_for_review" && routes.length > 0 && (
             <div className="hw-record__section">

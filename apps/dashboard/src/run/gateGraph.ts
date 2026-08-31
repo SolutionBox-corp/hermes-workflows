@@ -29,6 +29,77 @@ export function resolveGatedNode(detail: SpecDetail, gateId: string): string | n
   return sourceId;
 }
 
+/** What a step received, and from where. */
+export interface NodeInput {
+  /** The step whose work feeds this one. Null when it has no single source. */
+  fromNodeId: string | null;
+  fromTitle?: string;
+  /** A gate sits between them: its decision, and the note the reviewer left. */
+  decision?: string;
+  note?: string;
+  /** The gate's own id, when one is in the path. */
+  gateNodeId?: string;
+}
+
+/**
+ * What a node was handed, by walking one step back through the graph.
+ *
+ * Every step's output is already visible on that step. What was missing is the
+ * other half of the same fact: on the step that CONSUMES it, saying where its
+ * input came from. A gate in between is not a source, it is a decision about a
+ * source, so the walk passes through it and reports both: the work node whose
+ * output this step received, and the verdict and note attached on the way.
+ *
+ * Conservative in the same way {@link resolveGatedNode} is: an ambiguous or
+ * missing predecessor answers null rather than naming a plausible one.
+ */
+export function resolveNodeInput(
+  detail: SpecDetail,
+  nodeId: string,
+  nodeStates: Record<string, { review_decision?: string; review_note?: string }>,
+): NodeInput | null {
+  const workflow = detail.workflow;
+  const nodes: WorkflowNode[] = workflow.nodes ?? [];
+
+  const sourcesOf = (target: string): string[] => {
+    const found = new Set<string>();
+    for (const edge of workflow.edges ?? []) {
+      if (edge.to === target && edge.from !== target) found.add(edge.from);
+    }
+    return [...found];
+  };
+
+  const direct = sourcesOf(nodeId);
+  if (direct.length !== 1) return null;
+  const firstId = direct[0];
+  if (firstId === undefined) return null;
+  const first = nodes.find((node) => node.id === firstId);
+  if (first === undefined) return null;
+
+  if (first.type !== "human_review") {
+    const input: NodeInput = { fromNodeId: firstId };
+    if (first.title !== undefined) input.fromTitle = first.title;
+    return input;
+  }
+
+  // A gate: report its verdict, and keep walking to the work it judged.
+  const state = nodeStates[firstId];
+  const input: NodeInput = { fromNodeId: null, gateNodeId: firstId };
+  if (state?.review_decision !== undefined) input.decision = state.review_decision;
+  if (state?.review_note !== undefined) input.note = state.review_note;
+
+  const behind = sourcesOf(firstId).filter((id) => id !== nodeId);
+  const workId = behind.length === 1 ? behind[0] : undefined;
+  if (workId !== undefined) {
+    const work = nodes.find((node) => node.id === workId);
+    if (work !== undefined) {
+      input.fromNodeId = workId;
+      if (work.title !== undefined) input.fromTitle = work.title;
+    }
+  }
+  return input;
+}
+
 /** One choice a gate offers, and where the run goes if it is taken. */
 export interface ReviewRoute {
   decision: ReviewOption;

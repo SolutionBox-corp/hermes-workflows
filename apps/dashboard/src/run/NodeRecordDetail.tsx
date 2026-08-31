@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { WorkflowsApi } from "../api/client";
 import type { NodeRecordArtifact, NodeRunState, WorkflowNode } from "../api/types";
+import type { NodeInput } from "./gateGraph";
 import { NodeDefinition } from "./NodeDefinition";
 import { TelemetryDetail } from "./TelemetryDetail";
 import { useNodeArtifact } from "./useNodeArtifact";
@@ -23,6 +24,8 @@ export interface NodeRecordDetailProps {
   /** Render the step's `primary` artifact already open. Set at a gate, where the
    *  document being judged belongs on screen rather than behind a click. */
   expandPrimary?: boolean;
+  /** What this step received, and from where. See `resolveNodeInput`. */
+  input?: NodeInput | null;
 }
 
 /** `finished_at - started_at`, in the same shape TelemetryDetail formats. */
@@ -151,6 +154,7 @@ export function NodeRecordDetail({
   title,
   description,
   expandPrimary = false,
+  input,
 }: NodeRecordDetailProps): React.ReactElement {
   const record = node.record;
   const elapsed =
@@ -176,21 +180,56 @@ export function NodeRecordDetail({
           record still shows the command it ran. */}
       <NodeDefinition node={spec} />
 
+      {/* Where this step's material came from. Each step already showed what it
+          produced; this is the same fact seen from the consuming end, so a run
+          reads as a chain rather than a row of unrelated boxes. */}
+      {input !== undefined && input !== null && (
+        <div className="hw-record__section">
+          <div className="hw-eyebrow">Vstup</div>
+          <dl className="hw-record__facts">
+            {input.fromTitle !== undefined || input.fromNodeId !== null ? (
+              <div className="hw-record__fact">
+                <dt>z kroku</dt>
+                <dd>{input.fromTitle ?? input.fromNodeId}</dd>
+              </div>
+            ) : null}
+            {input.decision !== undefined && (
+              <div className="hw-record__fact">
+                <dt>rozhodnutí</dt>
+                <dd>{input.decision}</dd>
+              </div>
+            )}
+            {input.note !== undefined && input.note !== "" && (
+              <div className="hw-record__fact">
+                <dt>poznámka</dt>
+                <dd>{input.note}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      )}
+
       {record?.headline !== undefined && <p className="hw-record__headline">{record.headline}</p>}
 
       {/* What the step wants a person to decide. Above the evidence, because a
           reviewer who reads the evidence without knowing the question reads it
           for the wrong thing. */}
-      {record?.questions !== undefined && record.questions.length > 0 && (
-        <div className="hw-record__questions">
-          <div className="hw-eyebrow">Chce po tobě rozhodnout</div>
-          <ol>
-            {record.questions.map((question) => (
-              <li key={question}>{question}</li>
-            ))}
-          </ol>
-        </div>
-      )}
+      {record?.questions !== undefined &&
+        (record.questions.length > 0 ? (
+          <div className="hw-record__questions">
+            <div className="hw-eyebrow">Chce po tobě rozhodnout</div>
+            <ol>
+              {record.questions.map((question) => (
+                <li key={question}>{question}</li>
+              ))}
+            </ol>
+          </div>
+        ) : (
+          // An empty list is the step answering, and it is worth saying out
+          // loud: "no open questions" and "the step never said" look identical
+          // once the section is simply hidden.
+          <p className="hw-note">Krok hlásí: žádná otevřená rozhodnutí.</p>
+        ))}
 
       {record?.facts !== undefined && record.facts.length > 0 && (
         <dl className="hw-record__facts">
