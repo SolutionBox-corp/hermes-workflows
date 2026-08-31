@@ -89,6 +89,13 @@ export interface NodeRecordArtifact {
   bytes?: number;
   /** The stored copy hit the artifact size cap and is incomplete. */
   truncated?: boolean;
+  /**
+   * The one artifact a reviewer is meant to read. A gate renders it already
+   * open, because asking somebody to judge a document and then hiding the
+   * document behind a click is the whole complaint this answers. The step
+   * chooses it; nothing guesses.
+   */
+  primary?: boolean;
 }
 
 /**
@@ -111,6 +118,15 @@ export interface NodeRecord {
   /** Where the work landed and how to pick it up. */
   handoff?: { label: string; value: string }[];
   artifacts?: NodeRecordArtifact[];
+  /**
+   * Decisions the step is asking a person to make, in its own words.
+   *
+   * A gate exists to get a judgement, and a reviewer who has to reconstruct the
+   * open questions out of a long result is being asked to review blind. A step
+   * that has none says so; an empty list and an absent list mean different
+   * things and both are rendered as such.
+   */
+  questions?: string[];
   /** Non-fatal problems recording the step, e.g. an artifact it could not read. */
   warnings?: string[];
 }

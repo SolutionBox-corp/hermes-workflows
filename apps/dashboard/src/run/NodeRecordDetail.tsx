@@ -13,13 +13,16 @@ export interface NodeRecordDetailProps {
   /** The node's spec entry. Answers "what was this step asked to do" without
    *  any cooperation from the step itself. */
   spec?: WorkflowNode;
-  /** The node's title from the spec. Rendered as a heading only when given —
+  /** The node's title from the spec. Rendered as a heading only when given -
    *  the primary record in a modal already has the title in the modal's own
    *  header, while an embedded record (a gate showing the step it judges) needs
    *  to say which step it is describing. */
   title?: string;
   /** The node's description from the spec: what this step is for. */
   description?: string;
+  /** Render the step's `primary` artifact already open. Set at a gate, where the
+   *  document being judged belongs on screen rather than behind a click. */
+  expandPrimary?: boolean;
 }
 
 /** `finished_at - started_at`, in the same shape TelemetryDetail formats. */
@@ -35,21 +38,62 @@ function formatBytes(bytes: number | undefined): string {
 }
 
 /**
+ * A patch, coloured per line so it reads the way a diff is meant to read.
+ *
+ * A single `<pre>` cannot colour anything: the artifact is plain text with no
+ * per-line elements to target, so a diff looked exactly like any other file and
+ * a reviewer had to spot `+` and `-` by eye. Each line becomes its own element
+ * classed by what it is, which is also what lets a long patch be skimmed.
+ */
+function DiffBody({ text }: { text: string }): React.ReactElement {
+  return (
+    <pre className="hw-output hw-diff">
+      {text.split("\n").map((line, index) => {
+        // Order matters: `+++` and `---` are file headers, not an added or a
+        // removed line, and colouring them green and red is actively wrong.
+        const kind = line.startsWith("+++") || line.startsWith("---")
+          ? "head"
+          : line.startsWith("@@")
+            ? "hunk"
+            : line.startsWith("diff ") || line.startsWith("index ")
+              ? "head"
+              : line.startsWith("+")
+                ? "add"
+                : line.startsWith("-")
+                  ? "del"
+                  : "ctx";
+        return (
+          <span key={index} className={`hw-diff__${kind}`}>
+            {line === "" ? " " : line}
+            {"\n"}
+          </span>
+        );
+      })}
+    </pre>
+  );
+}
+
+/**
  * One artifact as a collapsed section. The content is fetched the first time it
- * is opened and not before — the run state carries only the name and size.
+ * is opened and not before - the run state carries only the name and size.
  */
 function ArtifactSection({
   api,
   runId,
   nodeId,
   artifact,
+  startOpen = false,
 }: {
   api: WorkflowsApi;
   runId: string;
   nodeId: string;
   artifact: NodeRecordArtifact;
+  /** Open on first render. Used at a gate for the evidence the decision rests
+   *  on: if a person is being asked to judge a document, the document should be
+   *  on screen, not one click away behind a summary. */
+  startOpen?: boolean;
 }): React.ReactElement {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen);
   const { text, truncated, loading, error } = useNodeArtifact(
     api,
     runId,
@@ -80,11 +124,10 @@ function ArtifactSection({
           Could not read {artifact.name}: {error}
         </p>
       )}
-      {text !== null && (
-        <pre className={artifact.kind === "diff" ? "hw-output hw-diff" : "hw-output"}>{text}</pre>
-      )}
+      {text !== null &&
+        (artifact.kind === "diff" ? <DiffBody text={text} /> : <pre className="hw-output">{text}</pre>)}
       {(truncated || artifact.truncated === true) && (
-        <p className="hw-note">Truncated at the artifact size cap — this copy is incomplete.</p>
+        <p className="hw-note">Truncated at the artifact size cap - this copy is incomplete.</p>
       )}
     </details>
   );
@@ -96,7 +139,7 @@ function ArtifactSection({
  *
  * The raw output is always rendered last and is never conditional on a record
  * existing. A step that declared nothing is still a step, and the plain output
- * is what the inspector showed before any of this — losing it for such a node
+ * is what the inspector showed before any of this - losing it for such a node
  * would be a regression dressed as a feature.
  */
 export function NodeRecordDetail({
@@ -107,6 +150,7 @@ export function NodeRecordDetail({
   spec,
   title,
   description,
+  expandPrimary = false,
 }: NodeRecordDetailProps): React.ReactElement {
   const record = node.record;
   const elapsed =
@@ -133,6 +177,20 @@ export function NodeRecordDetail({
       <NodeDefinition node={spec} />
 
       {record?.headline !== undefined && <p className="hw-record__headline">{record.headline}</p>}
+
+      {/* What the step wants a person to decide. Above the evidence, because a
+          reviewer who reads the evidence without knowing the question reads it
+          for the wrong thing. */}
+      {record?.questions !== undefined && record.questions.length > 0 && (
+        <div className="hw-record__questions">
+          <div className="hw-eyebrow">Chce po tobě rozhodnout</div>
+          <ol>
+            {record.questions.map((question) => (
+              <li key={question}>{question}</li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       {record?.facts !== undefined && record.facts.length > 0 && (
         <dl className="hw-record__facts">
@@ -162,6 +220,7 @@ export function NodeRecordDetail({
               runId={runId}
               nodeId={nodeId}
               artifact={artifact}
+              startOpen={expandPrimary && artifact.primary === true}
             />
           ))}
         </div>

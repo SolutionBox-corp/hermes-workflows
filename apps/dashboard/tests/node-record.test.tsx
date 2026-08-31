@@ -1,7 +1,7 @@
 /** The node audit record in the run inspector.
  *
  * Before this the modal showed a bare node id, a status, and one `<pre>` of
- * whatever the command printed — so a step that wrote a 17 kB design document
+ * whatever the command printed - so a step that wrote a 17 kB design document
  * and cost $1.49 was indistinguishable from one that did nothing, and a gate
  * showed nothing at all about the step it was judging.
  */
@@ -170,7 +170,7 @@ async function openNode(id: string): Promise<void> {
   fireEvent.click(button);
 }
 
-describe("run inspector — the node modal", () => {
+describe("run inspector - the node modal", () => {
   it("titles the modal with the step's name, not its id", async () => {
     const api = inspectorApi({ explore: { node_id: "explore", status: "completed" } });
     render(<RunInspector runId="r1" client={api} pollMs={0} />);
@@ -210,5 +210,67 @@ describe("run inspector — the node modal", () => {
 
     expect(await screen.findByRole("button", { name: "Approve" })).toBeTruthy();
     expect(screen.queryByText("What you are approving")).toBeNull();
+  });
+});
+
+describe("NodeRecordDetail - what the reviewer must decide", () => {
+  it("lists the questions the step is asking a person", () => {
+    renderRecord(node({ record: { questions: ["Funkce nema volajiciho.", "Potvrdit l a ss."] } }));
+    expect(screen.getByText("Chce po tobě rozhodnout")).toBeTruthy();
+    expect(screen.getByText("Funkce nema volajiciho.")).toBeTruthy();
+    expect(screen.getByText("Potvrdit l a ss.")).toBeTruthy();
+  });
+
+  it("shows no questions block when the step asked nothing", () => {
+    renderRecord(node({ record: { headline: "ok" } }));
+    expect(screen.queryByText("Chce po tobě rozhodnout")).toBeNull();
+  });
+
+  it("colours a diff per line, and does not colour its file headers", async () => {
+    const patch = ["diff --git a/x b/x", "--- a/x", "+++ b/x", "@@ -1 +1 @@", "-old", "+new", " ctx"].join("\n");
+    const api = apiWith(patch);
+    renderRecord(node({ record: { artifacts: [{ name: "d.patch", label: "Diff", kind: "diff" as const }] } }), api);
+    fireEvent.click(screen.getByText("Diff"));
+
+    const added = await waitFor(() => {
+      const el = document.querySelector(".hw-diff__add");
+      if (el === null) throw new Error("not rendered yet");
+      return el;
+    });
+    expect(added.textContent).toContain("+new");
+    expect(document.querySelector(".hw-diff__del")?.textContent).toContain("-old");
+    expect(document.querySelector(".hw-diff__hunk")?.textContent).toContain("@@");
+    // `+++`/`---` are file headers, not added or removed lines.
+    const heads = [...document.querySelectorAll(".hw-diff__head")].map((e) => e.textContent?.trim());
+    expect(heads).toContain("+++ b/x");
+    expect(heads).toContain("--- a/x");
+  });
+
+  it("opens the primary artifact at a gate, and only the primary one", async () => {
+    const api = apiWith("THE DESIGN");
+    renderRecord(
+      node({
+        record: {
+          artifacts: [
+            { name: "a.md", label: "Other", kind: "text" as const },
+            { name: "design.md", label: "Navrh", kind: "markdown" as const, primary: true },
+          ],
+        },
+      }),
+      api,
+      { expandPrimary: true },
+    );
+    await waitFor(() => expect(screen.getByText("THE DESIGN")).toBeTruthy());
+    expect(api.getNodeArtifact).toHaveBeenCalledTimes(1);
+    expect(api.getNodeArtifact).toHaveBeenCalledWith("r1", "explore", "design.md");
+  });
+
+  it("leaves the primary artifact closed away from a gate", () => {
+    const api = apiWith("THE DESIGN");
+    renderRecord(
+      node({ record: { artifacts: [{ name: "design.md", label: "Navrh", primary: true }] } }),
+      api,
+    );
+    expect(api.getNodeArtifact).not.toHaveBeenCalled();
   });
 });

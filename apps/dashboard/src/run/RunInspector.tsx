@@ -9,7 +9,7 @@ import { applyRunStatus, isTerminalRun } from "./runView";
 import { CANVAS_NODE_TYPES } from "./canvasNodeTypes";
 import { errorMessage, RUN_POLL_MS, useRunPolling } from "./useRunPolling";
 import { NodeRecordDetail } from "./NodeRecordDetail";
-import { resolveGatedNode } from "./upstreamNode";
+import { resolveGatedNode, reviewRoutes } from "./gateGraph";
 import { RunLogPanel } from "./RunLogPanel";
 import { deriveRunLogEvents, mergeRunLog, type LoggedRunEvent } from "./runLog";
 import { Badge, Button, Modal } from "../ui/components";
@@ -161,10 +161,13 @@ export function RunInspector({
   // For a gate, the step it is judging. `resolveGatedNode` declines whenever the
   // graph is ambiguous, and a gate whose upstream node has not run yet has no
   // record to show, so both cases fall back to the buttons alone.
+  const isGate = selected?.status === "waiting_for_review";
+  // What each button does, read from the graph. A gate asked for a decision and
+  // said nothing about the consequence of any of its three choices; the spec
+  // knows, so there is no reason to learn it by pressing one.
+  const routes = isGate && selectedNodeId !== null ? reviewRoutes(detail, selectedNodeId) : [];
   const gatedId =
-    selectedNodeId !== null && selected?.status === "waiting_for_review"
-      ? resolveGatedNode(detail, selectedNodeId)
-      : null;
+    selectedNodeId !== null && isGate ? resolveGatedNode(detail, selectedNodeId) : null;
   const gatedNode = gatedId === null ? undefined : run.nodes[gatedId];
   const gated =
     gatedId !== null && gatedNode !== undefined
@@ -273,6 +276,21 @@ export function RunInspector({
               nothing about that step at all — you approved blind, or left the
               browser to go read files. Render the gated node's record first, so
               the evidence is above the buttons that act on it. */}
+          {/* A gate's own instruction comes first and on its own: it says what
+              the reviewer is deciding, and reading the evidence without knowing
+              the question means reading it for the wrong thing. */}
+          {isGate && selectedSpec?.description !== undefined && (
+            <div className="hw-record__section">
+              <div className="hw-eyebrow">Rozhoduješ</div>
+              <p>{selectedSpec.description}</p>
+            </div>
+          )}
+
+          {/* A gate judges the step above it, and until this existed it showed
+              nothing about that step at all — you approved blind, or left the
+              browser to go read files. Render the gated node's record first, so
+              the evidence is above the buttons that act on it, and open the one
+              artifact the step marked as the thing to read. */}
           {gated !== null && (
             <div className="hw-record-gated">
               <div className="hw-eyebrow">What you are approving</div>
@@ -284,20 +302,41 @@ export function RunInspector({
                 spec={gated.spec}
                 title={gated.spec?.title}
                 description={gated.spec?.description}
+                expandPrimary
               />
             </div>
           )}
           {/* No `title` here: the modal header already carries it, and a second
               heading with the same text is noise. The embedded gated record
-              above does pass one, because it has to say which step it describes. */}
+              above does pass one, because it has to say which step it describes.
+              A gate's description is already shown above, so it is not repeated. */}
           <NodeRecordDetail
             api={api}
             runId={runId}
             nodeId={selectedNodeId}
             node={selected}
             spec={selectedSpec}
-            description={selectedSpec?.description}
+            description={isGate ? undefined : selectedSpec?.description}
           />
+          {selected.status === "waiting_for_review" && routes.length > 0 && (
+            <div className="hw-record__section">
+              <div className="hw-eyebrow">Kam to půjde</div>
+              <dl className="hw-record__facts">
+                {routes.map((route) => (
+                  <div key={route.decision} className="hw-record__fact">
+                    <dt>{route.decision}</dt>
+                    <dd>
+                      {route.nodeId === null
+                        ? "nikam — graf pro tuhle volbu nemá hranu"
+                        : route.ends !== undefined
+                          ? `${route.title ?? route.nodeId} · běh končí (${route.ends})`
+                          : (route.title ?? route.nodeId)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          )}
           {selected.status === "waiting_for_review" && (
             <label className="hw-review-note">
               Note for the next step

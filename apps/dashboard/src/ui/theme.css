@@ -593,12 +593,36 @@ a.hw-o2b:focus-visible {
   color: var(--color-muted-foreground, #9a9a9a);
 }
 
-/* A diff reads as a diff: added and removed lines carry their own colour.
-   Applied to the whole block rather than per line, because the artifact is
-   plain text and there are no per-line elements to target. */
+/* A diff reads as a diff. The artifact is plain text, so DiffBody wraps each
+   line in its own span and these colour them; a single <pre> could not. */
 .hw-diff {
   font-variant-ligatures: none;
   tab-size: 4;
+}
+.hw-diff__add {
+  color: var(--color-success, #39d353);
+}
+.hw-diff__del {
+  color: var(--color-destructive, #e06c6c);
+}
+.hw-diff__hunk {
+  color: var(--color-accent, #ffb000);
+}
+.hw-diff__head {
+  color: var(--color-muted-foreground, #9a9a9a);
+}
+
+/* What the step is asking a person to decide. Set apart from the facts around
+   it, because it is the one block a reviewer must not skim past. */
+.hw-record__questions {
+  border-left: 3px solid var(--color-accent, #ffb000);
+  padding: 4px 0 4px 10px;
+}
+.hw-record__questions ol {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
 }
 
 /* The record of the step a gate is judging, above the buttons that act on it.

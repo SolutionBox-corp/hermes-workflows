@@ -179,15 +179,19 @@ class ScriptExecutor:
             except (OSError, ValueError) as exc:
                 warnings.append(f"artifact {name!r} not stored: {exc}")
                 continue
-            kept.append(
-                {
-                    "name": name,
-                    "label": entry.get("label") or name,
-                    "kind": entry.get("kind") or "text",
-                    "bytes": written,
-                    "truncated": written >= artifacts.MAX_ARTIFACT_BYTES,
-                }
-            )
+            stored = {
+                "name": name,
+                "label": entry.get("label") or name,
+                "kind": entry.get("kind") or "text",
+                "bytes": written,
+                "truncated": written >= artifacts.MAX_ARTIFACT_BYTES,
+            }
+            # Carried through: it marks the one artifact a reviewer is meant to
+            # read, and a gate opens it for them. Dropping it here would leave
+            # the document the decision rests on hidden behind a click again.
+            if entry.get("primary"):
+                stored["primary"] = True
+            kept.append(stored)
         record["artifacts"] = kept
         if warnings:
             record["warnings"] = warnings

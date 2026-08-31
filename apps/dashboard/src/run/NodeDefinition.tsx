@@ -4,7 +4,7 @@ import type { WorkflowNode } from "../api/types";
  * What a step *is*, read out of the workflow spec.
  *
  * The audit record covers what a step did; this covers what it was asked to do,
- * and it needs no cooperation from the step at all — the answer is already in
+ * and it needs no cooperation from the step at all - the answer is already in
  * the workflow. Without it a `prompt` node, whose entire content is its text,
  * rendered as a status line and nothing else, and a script node never showed
  * the command it ran.

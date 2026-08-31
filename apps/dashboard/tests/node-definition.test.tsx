@@ -1,7 +1,7 @@
 /** What the step *is*, drawn from the spec.
  *
  * The record covers what a step did. Nothing covered what it was asked to do,
- * so a `prompt` node — whose entire content is its text — rendered as a status
+ * so a `prompt` node - whose entire content is its text - rendered as a status
  * line and nothing else, and a script node never showed the command it ran.
  * That half needs no cooperation from the step: it is in the workflow already.
  */

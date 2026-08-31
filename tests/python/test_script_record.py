@@ -162,3 +162,40 @@ def test_a_non_list_artifacts_field_is_ignored_not_fatal(tmp_path) -> None:
     completion = _run(_executor(tmp_path), f"echo hi; {_emit({'artifacts': 'nope'})}")
     assert completion.outcome == "success"
     assert completion.record is not None
+
+
+def test_primary_flag_survives_into_the_stored_record(tmp_path) -> None:
+    """It marks the one artifact a reviewer is meant to read, and the gate opens
+    it for them. Losing it here would put the document being judged back behind
+    a click."""
+    source = tmp_path / "design.md"
+    source.write_text("# design", encoding="utf-8")
+    ex = _executor(tmp_path)
+    record = {"artifacts": [{"name": "design.md", "label": "Navrh", "kind": "markdown",
+                             "primary": True, "path": str(source)}]}
+
+    completion = _run(ex, f"echo hi; {_emit(record)}")
+
+    entry = completion.record["artifacts"][0]
+    assert entry["primary"] is True
+    assert entry["name"] == "design.md"
+
+
+def test_an_artifact_without_the_flag_does_not_gain_one(tmp_path) -> None:
+    source = tmp_path / "other.txt"
+    source.write_text("x", encoding="utf-8")
+    ex = _executor(tmp_path)
+    record = {"artifacts": [{"name": "other.txt", "path": str(source)}]}
+
+    completion = _run(ex, f"echo hi; {_emit(record)}")
+
+    assert "primary" not in completion.record["artifacts"][0]
+
+
+def test_questions_reach_the_record(tmp_path) -> None:
+    ex = _executor(tmp_path)
+    record = {"questions": ["Potvrdit rozsah?", "Ma to mit vlastni spec?"]}
+
+    completion = _run(ex, f"echo hi; {_emit(record)}")
+
+    assert completion.record["questions"] == ["Potvrdit rozsah?", "Ma to mit vlastni spec?"]

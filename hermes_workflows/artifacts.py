@@ -7,7 +7,7 @@ reader for the same contract)::
 
 Bytes live here rather than in the node's ``output`` column for two reasons. The
 run inspector polls the whole run state every couple of seconds, so anything in
-it is re-sent on that cadence — a diff has no business riding a 2-second poll.
+it is re-sent on that cadence - a diff has no business riding a 2-second poll.
 And the output column is clipped at 100 000 characters, which a real diff will
 happily exceed. Only an artifact's *metadata* (name, label, kind, size) travels
 with the run state; the content is fetched when a person opens it.
@@ -66,7 +66,7 @@ def store_artifact(
     """Copy ``source`` into the store as ``name``; return the bytes kept.
 
     Copies at most :data:`MAX_ARTIFACT_BYTES`. Raises ``ValueError`` for an
-    unsafe name or id and ``OSError`` when the source cannot be read — both are
+    unsafe name or id and ``OSError`` when the source cannot be read - both are
     for the caller to turn into a warning on the record, because a step that did
     its work must not be failed by an unreadable side file.
     """
@@ -94,7 +94,7 @@ def read_artifact(
 
     Never raises: an unsafe name is indistinguishable from an absent one, so a
     caller serving this over HTTP answers 404 for both without having to tell
-    them apart. Decoding is lenient — an artifact is evidence to read, and
+    them apart. Decoding is lenient - an artifact is evidence to read, and
     partially binary content should still be readable rather than fatal.
     """
     try:

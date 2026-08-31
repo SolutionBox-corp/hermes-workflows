@@ -1,8 +1,8 @@
 """Parse the optional structured record a script node may append to its stdout.
 
 A script node's output is prose: whatever the command printed. That makes every
-structured thing about a step — what it cost, which branch the work landed on,
-which files are the evidence — something a person has to re-read out of English.
+structured thing about a step - what it cost, which branch the work landed on,
+which files are the evidence - something a person has to re-read out of English.
 This module gives a command one narrow channel for saying it in a machine-
 readable way, without changing what `output` means for anyone who was already
 consuming it.
@@ -10,7 +10,7 @@ consuming it.
 The contract is deliberately strict: the LAST non-empty line, a JSON object
 whose ONLY top-level key is ``hermes_node``, whose value is itself an object.
 Anything looser would silently eat the output of a command that happens to end
-in JSON — and a script node's ``output`` is a consumed value, not decoration: a
+in JSON - and a script node's ``output`` is a consumed value, not decoration: a
 ``wait`` node reads ``{{nodes.<id>.output}}``. When any part of the contract is
 unmet the stdout is returned exactly as it arrived and no record is claimed.
 
