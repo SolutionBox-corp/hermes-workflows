@@ -28,11 +28,19 @@ stop being distinguishable.
 | Symbols | Serena present, unused | Serena plus a hook that refuses grep on a symbol until Serena has been asked |
 | Browser | none | Playwright MCP (`@playwright/mcp` 0.0.79, chromium headless shell) |
 | Data | none | Per-project `SELECT`-only database account, never the operator's |
-| Method | none | `~/.hermes/coding/EXPLORE.md` |
+| Method | none | the box user's own `~/.claude/CLAUDE.md` |
 
 Provisioned on the box 2026-08-31 and verified by running, not by installing:
 chromium 151, docker 26.1.5 (`hello-world` ran), Playwright screenshot of
 `example.com` produced a 1280x720 PNG.
+
+The database role exists as of the same date: `hermes_explore` on solutionbox2,
+`LOGIN` only, no `SUPERUSER` / `CREATEDB` / `CREATEROLE`, connection limit 5.
+Read-only by construction and verified empirically: `SELECT` succeeds,
+`DELETE` and `CREATE TABLE` are refused, and a production application table is
+refused. Granted so far on `taxi-nova-testovaci-00` only (150 tables); every
+other database is unread until granted deliberately. The credential lives in
+mirobot1's git-crypt encrypted `~/.hermes/.env`.
 
 ## 3. Three tiers of enforcement
 
@@ -65,10 +73,20 @@ rendered where a reviewer sees it. The step declares, per run:
 A missing answer is rendered as missing. It is never hidden, and it never
 silently reads as a pass.
 
-### 3.3 EXPLORE.md (the method)
+### 3.3 The box's own `CLAUDE.md` (the method)
 
-A distillation of the operator's `CLAUDE.md` (37k characters) down to what
-applies to unattended exploration:
+The method is written to `~/.claude/CLAUDE.md` **of the `hermes` user on the
+box**, not to a separate file the stage prompt has to remember to point at.
+
+This matters more than it looks. A referenced document is loaded only if the
+prompt says so and only for the stage that says it; an instruction file is
+loaded by Claude Code itself, for every step, without anyone remembering. It is
+also the same mechanism the operator relies on locally, and the session digest
+already reports it, so "Instruction files in force" stops reading `None found`
+and starts naming the file that was actually in effect.
+
+Its content is a distillation of the operator's `CLAUDE.md` (37k characters)
+down to what applies to unattended exploration:
 
 - Serena, then LSP, then grep, in that order
 - "grep found nothing" is not evidence of absence
@@ -133,7 +151,12 @@ The mechanics stay; the presentation is corrected. Observed in the browser on
 - **Electron targets.** Playwright cannot reach Helper-2's UI. The bug path
   works for web projects; for Helper-2 it stays code plus data.
 - **Drift between EXPLORE.md and CLAUDE.md** (section 3.3).
-- **Read-only accounts** must be created per project on solutionbox2 by hand.
+- **Schema is visible on every database.** The read-only account cannot read
+  application data it was not granted, but PostgreSQL lets any role connect to
+  any database by default (PUBLIC holds CONNECT) and read the system catalogues,
+  so table and column names on production are enumerable. Closing that means
+  either revoking CONNECT from PUBLIC, which affects every other role, or a
+  `pg_hba.conf` rule. Neither was done unilaterally on a production server.
 - **Box provisioning is not in git.** chromium, docker and Playwright were
   installed by hand today. A rebuilt box would not have them. A provisioning
   script is outstanding.
@@ -147,4 +170,5 @@ The mechanics stay; the presentation is corrected. Observed in the browser on
 | How much of the method to inherit | Distil the explore-relevant part into `EXPLORE.md` | Shipping `CLAUDE.md` whole: contains rules that are meaningless or unsafe without a human to ask |
 | How to make Serena actually used | Port the `PreToolUse` hook | Prompt instruction alone: measurably already failed, 0 symbolic queries across two runs |
 | Database access | Per-project `SELECT`-only account | A local Postgres container: the data lives on solutionbox2, and a copy will not show a bug that depends on fresh data |
+| Where the method lives | The box user's `~/.claude/CLAUDE.md` | A referenced `EXPLORE.md`: loaded only when a prompt remembers to point at it, and invisible to the digest |
 | Where this spec lives | `docs/specs/`, this repo's existing model | Spec Kit or OpenSpec: both would put a second spec model beside the 13 specs already here |
