@@ -166,10 +166,22 @@ export function NodeRecordDetail({
   input,
 }: NodeRecordDetailProps): React.ReactElement {
   const record = node.record;
-  const elapsed =
+  // The step's own measurement wins over the engine's stamps.
+  //
+  // A synchronous script node is invoked inline BEFORE the engine writes node
+  // state, so the stamps bracket when the engine noticed rather than how long
+  // the work took. Measured in production: a step that ran 296 seconds was
+  // stamped 22 seconds apart. The stamps remain the fallback, because a node
+  // that reports no telemetry still took some time and saying nothing is worse
+  // than saying roughly.
+  const measured = node.telemetry?.duration_ms;
+  const stamped =
     node.started_at !== undefined && node.finished_at !== undefined
-      ? formatElapsed(node.finished_at - node.started_at)
-      : null;
+      ? node.finished_at - node.started_at
+      : undefined;
+  const elapsedSeconds =
+    measured !== undefined ? Math.round(measured / 1000) : stamped;
+  const elapsed = elapsedSeconds === undefined ? null : formatElapsed(elapsedSeconds);
 
   return (
     <div className="hw-record">

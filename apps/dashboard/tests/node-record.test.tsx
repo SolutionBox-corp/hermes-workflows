@@ -274,3 +274,34 @@ describe("NodeRecordDetail - what the reviewer must decide", () => {
     expect(api.getNodeArtifact).not.toHaveBeenCalled();
   });
 });
+
+
+describe("NodeRecordDetail - how long the step took", () => {
+  it("prefers the step's own measurement over the stamped times", () => {
+    // Measured in production: a synchronous script node is invoked inline
+    // BEFORE the engine writes node state, so the stamps bracket the
+    // bookkeeping. A real 296-second step was stamped 22 seconds apart.
+    renderRecord(
+      node({
+        started_at: 1788160789,
+        finished_at: 1788160811,
+        telemetry: { duration_ms: 295744 },
+      }),
+    );
+    // Scoped to the status line: the telemetry block legitimately shows the
+    // same duration as a detail row, so an unscoped query matches both.
+    const status = document.querySelector(".hw-record__status");
+    expect(status?.textContent).toContain("4m 56s");
+    expect(status?.textContent).not.toContain("22s");
+  });
+
+  it("falls back to the stamped times when the step measured nothing", () => {
+    renderRecord(node({ started_at: 1788160789, finished_at: 1788160811 }));
+    expect(document.querySelector(".hw-record__status")?.textContent).toContain("22s");
+  });
+
+  it("shows nothing when neither is available", () => {
+    renderRecord(node({ status: "running" }));
+    expect(screen.queryByText(/\d+s/)).toBeNull();
+  });
+});
