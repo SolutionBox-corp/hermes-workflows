@@ -150,7 +150,7 @@ The mechanics stay; the presentation is corrected. Observed in the browser on
 
 - **Electron targets.** Playwright cannot reach Helper-2's UI. The bug path
   works for web projects; for Helper-2 it stays code plus data.
-- **Drift between EXPLORE.md and CLAUDE.md** (section 3.3).
+- **Drift between the box's `CLAUDE.md` and the operator's** (section 3.3).
 - **Schema is visible on every database.** The read-only account cannot read
   application data it was not granted, but PostgreSQL lets any role connect to
   any database by default (PUBLIC holds CONNECT) and read the system catalogues,
