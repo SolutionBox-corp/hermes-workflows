@@ -167,7 +167,7 @@ The mechanics stay; the presentation is corrected. Observed in the browser on
 
 | Decision | Chosen | Rejected, and why |
 | --- | --- | --- |
-| How much of the method to inherit | Distil the explore-relevant part into `EXPLORE.md` | Shipping `CLAUDE.md` whole: contains rules that are meaningless or unsafe without a human to ask |
+| How much of the method to inherit | Distil the explore-relevant part | Shipping `CLAUDE.md` whole: contains rules that are meaningless or unsafe without a human to ask |
 | How to make Serena actually used | Port the `PreToolUse` hook | Prompt instruction alone: measurably already failed, 0 symbolic queries across two runs |
 | Database access | Per-project `SELECT`-only account | A local Postgres container: the data lives on solutionbox2, and a copy will not show a bug that depends on fresh data |
 | Where the method lives | The box user's `~/.claude/CLAUDE.md` | A referenced `EXPLORE.md`: loaded only when a prompt remembers to point at it, and invisible to the digest |
