@@ -246,6 +246,38 @@ describe("NodeRecordDetail - what the reviewer must decide", () => {
     expect(heads).toContain("--- a/x");
   });
 
+  it("renders a markdown artifact as a document, not as its source", async () => {
+    // The step declares `kind: "markdown"` on the report it writes; the
+    // inspector used to render it into the same `<pre>` as a log dump, so a
+    // report arrived as `##` and `**` for a reviewer to decode.
+    const api = apiWith(["## Step 1", "", "- first blocker"].join("\n"));
+    renderRecord(
+      node({ record: { artifacts: [{ name: "report.md", label: "Report", kind: "markdown" as const }] } }),
+      api,
+    );
+    fireEvent.click(screen.getByText("Report"));
+
+    const heading = await waitFor(() => {
+      const el = document.querySelector(".hw-md h5");
+      if (el === null) throw new Error("not rendered yet");
+      return el;
+    });
+    expect(heading.textContent).toContain("Step 1");
+    expect(document.querySelector(".hw-md li")?.textContent).toContain("first blocker");
+  });
+
+  it("still renders a plain text artifact as plain output", async () => {
+    const api = apiWith("## not markdown, just text");
+    renderRecord(
+      node({ record: { artifacts: [{ name: "log.txt", label: "Log", kind: "text" as const }] } }),
+      api,
+    );
+    fireEvent.click(screen.getByText("Log"));
+
+    await waitFor(() => expect(screen.getByText("## not markdown, just text")).toBeTruthy());
+    expect(document.querySelector(".hw-md")).toBeNull();
+  });
+
   it("opens the primary artifact at a gate, and only the primary one", async () => {
     const api = apiWith("THE DESIGN");
     renderRecord(

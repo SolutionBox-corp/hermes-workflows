@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { WorkflowsApi } from "../api/client";
 import type { NodeRecordArtifact, NodeRunState, WorkflowNode } from "../api/types";
 import type { NodeInput } from "./gateGraph";
+import { DiffBody } from "./DiffBody";
+import { MarkdownBody } from "./MarkdownBody";
 import { NodeDefinition } from "./NodeDefinition";
 import { TelemetryDetail } from "./TelemetryDetail";
 import { useNodeArtifact } from "./useNodeArtifact";
@@ -38,42 +40,6 @@ function formatBytes(bytes: number | undefined): string {
   if (bytes === undefined) return "";
   if (bytes < 1024) return `${bytes} B`;
   return `${(bytes / 1024).toFixed(1)} kB`;
-}
-
-/**
- * A patch, coloured per line so it reads the way a diff is meant to read.
- *
- * A single `<pre>` cannot colour anything: the artifact is plain text with no
- * per-line elements to target, so a diff looked exactly like any other file and
- * a reviewer had to spot `+` and `-` by eye. Each line becomes its own element
- * classed by what it is, which is also what lets a long patch be skimmed.
- */
-function DiffBody({ text }: { text: string }): React.ReactElement {
-  return (
-    <pre className="hw-output hw-diff">
-      {text.split("\n").map((line, index) => {
-        // Order matters: `+++` and `---` are file headers, not an added or a
-        // removed line, and colouring them green and red is actively wrong.
-        const kind = line.startsWith("+++") || line.startsWith("---")
-          ? "head"
-          : line.startsWith("@@")
-            ? "hunk"
-            : line.startsWith("diff ") || line.startsWith("index ")
-              ? "head"
-              : line.startsWith("+")
-                ? "add"
-                : line.startsWith("-")
-                  ? "del"
-                  : "ctx";
-        return (
-          <span key={index} className={`hw-diff__${kind}`}>
-            {line === "" ? " " : line}
-            {"\n"}
-          </span>
-        );
-      })}
-    </pre>
-  );
 }
 
 /**
@@ -131,10 +97,16 @@ function ArtifactSection({
       {dataUrl !== null && (
         <img className="hw-shot" src={dataUrl} alt={artifact.label ?? artifact.name} />
       )}
+      {/* Each `kind` gets the form it is meant to be read in. A report is a
+          document, not a log dump: a step declares `markdown` on the one it
+          writes, and rendering that into the same monospace block as everything
+          else is what made a 300-line report arrive as its own source. */}
       {dataUrl === null &&
         text !== null &&
         (artifact.kind === "diff" ? (
           <DiffBody text={text} />
+        ) : artifact.kind === "markdown" ? (
+          <MarkdownBody text={text} />
         ) : (
           <pre className="hw-output">{text}</pre>
         ))}
